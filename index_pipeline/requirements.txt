@@ -1,0 +1,28 @@
+# LlamaIndex core and graph support
+llama-index>=0.10.0
+llama-index-graph-stores-neo4j>=0.2.0
+llama-index-llms-ollama>=0.1.0
+llama-index-embeddings-ollama>=0.1.0
+
+# Neo4j driver
+neo4j>=5.15.0
+
+# FastAPI web server
+fastapi>=0.115.0
+uvicorn[standard]>=0.25.0
+pydantic>=2.10.3
+python-multipart
+
+# Utilities
+requests>=2.31.0
+python-dotenv>=1.0.0
+
+# AWS SDK
+boto3>=1.34.0
+botocore>=1.34.0
+
+# LangChain for text splitting (OpenSearch pipeline)
+langchain>=0.3.0
+langchain-text-splitters>=0.3.0
+
+# Note: OpenSearch integration uses REST API (requests library already included)

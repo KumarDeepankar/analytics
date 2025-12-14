@@ -1,0 +1,42 @@
+{
+  "opensearch": {
+    "host": "98.93.206.97",
+    "port": 9200,
+    "username": "admin",
+    "password": "admin",
+    "index_name": "events_analytics",
+    "use_ssl": true,
+    "verify_certs": false,
+    "number_of_shards": 1,
+    "number_of_replicas": 0
+  },
+  "processing": {
+    "chunk_size": 1024,
+    "chunk_overlap": 100
+  },
+  "embedding": {
+    "model_name": "nomic-embed-text:latest",
+    "api_url": "http://localhost:11434/api/embeddings",
+    "api_key": "dg",
+    "use_bearer_token": false,
+    "custom_headers": {},
+    "request_body_template": null,
+    "response_format": "ollama",
+    "custom_response_parser": "",
+    "embedding_dimension": 768,
+    "provider": "local",
+    "gemini_api_key": "",
+    "gemini_model": "models/text-embedding-004"
+  },
+  "schema": {
+    "document_id_field": "docid",
+    "content_fields": [
+      "event_conclusion_overall"
+    ]
+  },
+  "mapping": {
+    "mapping_file": "core/config/events_mapping.json",
+    "auto_generate": false,
+    "sample_size": 2
+  }
+}

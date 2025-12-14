@@ -1,0 +1,14 @@
+{
+  "id": "sifonhardware_catalouge_2024_version_5_1_p54_4342d55d",
+  "raw": "",
+  "kv": [],
+  "meta": {
+    "source": "sifonHARDWARE CATALOUGE 2024 version 5 (1).pdf",
+    "page": 54,
+    "ts": "2025-12-13T05:31:30.459827",
+    "model": "gemini-2.5-flash",
+    "ocr": false,
+    "extraction_method": "gemini_vision",
+    "error": "504 Deadline Exceeded"
+  }
+}

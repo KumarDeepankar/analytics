@@ -1,0 +1,10 @@
+fastapi
+uvicorn[standard]
+langchain
+langgraph
+pydantic
+aiohttp
+requests
+httpx
+python-multipart
+python-jose[cryptography]

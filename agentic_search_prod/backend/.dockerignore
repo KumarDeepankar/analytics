@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg
+*.egg-info/
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Git
+.git/
+.gitignore
+
+# Test files
+test_*.py
+*_test.py
+
+# Documentation
+*.md
+docs/
+
+# HTML test/preview files
+chart_preview.html
+flow_diagram.html
+test_marked.html
+
+# Local files
+.env
+.env.local
+*.log

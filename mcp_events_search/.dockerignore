@@ -1,0 +1,28 @@
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+*.egg
+*.egg-info
+dist
+build
+.env
+.venv
+env/
+venv/
+.git
+.gitignore
+README.md
+.DS_Store
+
+# Test files
+test_*.py
+*_example*.py
+explore_*.py
+check_*.py
+backup_*.py
+
+# Mapping files (not needed at runtime)
+events_mapping.json

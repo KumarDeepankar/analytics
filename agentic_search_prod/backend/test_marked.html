@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Test marked.js</title>
+    <script src="https://cdn.jsdelivr.net/npm/marked@11.1.1/marked.min.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 50px auto;
+            padding: 20px;
+        }
+        #input {
+            width: 100%;
+            height: 200px;
+            margin-bottom: 20px;
+            font-family: monospace;
+        }
+        #output {
+            border: 1px solid #ccc;
+            padding: 20px;
+            background: #f9f9f9;
+        }
+    </style>
+</head>
+<body>
+    <h1>marked.js Test</h1>
+    <p>Edit the markdown below and see it rendered:</p>
+
+    <textarea id="input">## Wellness Events
+
+### Overview
+Wellness events are becoming increasingly popular as people seek to prioritize their physical and mental health.
+
+### Recent Examples
+
+#### TechVision AI Summit 2023 - Denmark
+The TechVision AI Summit 2023 was held in Denmark.
+
+| Event | Location | Year |
+|-------|----------|------|
+| TechVision | Denmark | 2023 |
+| Green Energy | Dominica | 2023 |
+
+> **Key Insight**: Wellness is a growing trend
+
+**Bold text** and *italic text*
+</textarea>
+
+    <button onclick="render()">Render Markdown</button>
+
+    <h2>Output:</h2>
+    <div id="output"></div>
+
+    <script>
+        function render() {
+            const input = document.getElementById('input').value;
+            const output = document.getElementById('output');
+
+            if (typeof marked !== 'undefined') {
+                console.log('✓ marked.js is loaded');
+                marked.setOptions({
+                    breaks: true,
+                    gfm: true,
+                    headerIds: false
+                });
+
+                const html = marked.parse(input);
+                console.log('Parsed HTML:', html);
+                output.innerHTML = html;
+            } else {
+                output.innerHTML = '<p style="color:red;">marked.js is NOT loaded!</p>';
+                console.error('❌ marked.js is NOT loaded');
+            }
+        }
+
+        // Auto-render on load
+        window.addEventListener('load', render);
+
+        // Check if marked is loaded
+        if (typeof marked !== 'undefined') {
+            console.log('✓ marked.js loaded successfully, version:', marked.version || 'unknown');
+        } else {
+            console.error('❌ marked.js NOT loaded');
+        }
+    </script>
+</body>
+</html>

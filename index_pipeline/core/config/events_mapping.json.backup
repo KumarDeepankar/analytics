@@ -1,0 +1,30 @@
+{
+  "settings": {
+    "number_of_shards": 1,
+    "number_of_replicas": 0
+  },
+  "mappings": {
+    "properties": {
+      "id": {
+        "type": "keyword",
+        "index": false
+      },
+      "raw": {
+        "type": "text"
+      },
+      "kv": {
+        "type": "keyword"
+      },
+      "meta": {
+        "properties": {
+          "source": {
+            "type": "keyword"
+          },
+          "page": {
+            "type": "integer"
+          }
+        }
+      }
+    }
+  }
+}

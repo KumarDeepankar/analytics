@@ -213,23 +213,3 @@ class IndexMetadata:
         """Get min/max range for a date field."""
         return self.date_ranges.get(field, Range(min="", max=""))
 
-    def get_context(self) -> dict:
-        """Return metadata summary for response context."""
-        return {
-            "index_name": self.index_name,
-            "total_documents": self.total_documents,
-            "last_updated": self.last_updated,
-            "keyword_fields": {f: len(v) for f, v in self.keyword_values.items()},
-            "numeric_ranges": {
-                f: {"min": r.min, "max": r.max}
-                for f, r in self.numeric_ranges.items()
-            },
-            "date_ranges": {
-                f: {"min": r.min, "max": r.max}
-                for f, r in self.date_ranges.items()
-            },
-            "field_coverage": {
-                f: round(v * 100, 1)
-                for f, v in self.field_coverage.items()
-            }
-        }

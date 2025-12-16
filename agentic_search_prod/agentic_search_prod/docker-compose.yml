@@ -1,0 +1,35 @@
+version: '3.8'
+
+services:
+  agentic-search:
+    build: .
+    image: agentic-search:prod
+    container_name: agentic-search
+    ports:
+      - "8023:8023"
+    environment:
+      # Gateway URLs - configure based on your deployment
+      # For Docker network, use service names or host.docker.internal
+      - TOOLS_GATEWAY_URL=http://host.docker.internal:8021
+      - TOOLS_GATEWAY_PUBLIC_URL=http://localhost:8021
+      - MCP_GATEWAY_URL=http://host.docker.internal:8021
+      - AGENTIC_SEARCH_URL=http://localhost:8023
+
+      # Ollama - use host or separate container
+      - OLLAMA_BASE_URL=http://host.docker.internal:11434
+
+      # Session config
+      - SESSION_COOKIE_SECURE=false
+      - SESSION_COOKIE_SAMESITE=lax
+
+    # Use host network to access localhost services (alternative to host.docker.internal)
+    # network_mode: "host"
+
+    # Or create a custom network to connect to tools_gateway
+    networks:
+      - mcp-network
+
+networks:
+  mcp-network:
+    name: mcp-network
+    driver: bridge

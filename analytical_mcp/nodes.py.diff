@@ -1,0 +1,140 @@
+--- a/agentic_search_prod/backend/ollama_query_agent/nodes.py
++++ b/agentic_search_prod/backend/ollama_query_agent/nodes.py
+@@ -636,6 +636,64 @@ async def execute_all_tasks_parallel_node(state: SearchAgentState) -> SearchAgen
+     return state
+
+
++async def execute_synthesis_tool_calls(tool_calls: List[Dict], state: SearchAgentState) -> List[Dict]:
++    """Execute tool calls requested during synthesis and return results"""
++    results = []
++    for tc in tool_calls:
++        tool_name = tc.get("tool") or tc.get("name")
++        arguments = tc.get("arguments", {})
++
++        # Parse arguments if string
++        if isinstance(arguments, str):
++            try:
++                arguments = json.loads(arguments)
++            except json.JSONDecodeError:
++                arguments = {}
++
++        try:
++            logger.info(f"[Synthesis] Calling tool: {tool_name}")
++            result = await mcp_tool_client.call_tool(tool_name, arguments)
++            results.append({
++                "tool_name": tool_name,
++                "arguments": arguments,
++                "result": result,
++                "source": "synthesis_augmentation"
++            })
++            logger.info(f"[Synthesis] Tool {tool_name} returned data")
++        except Exception as e:
++            logger.error(f"[Synthesis] Tool {tool_name} failed: {e}")
++            results.append({
++                "tool_name": tool_name,
++                "arguments": arguments,
++                "result": {"error": str(e)},
++                "source": "synthesis_augmentation"
++            })
++    return results
++
++
++def parse_tool_calls_from_response(response: str) -> tuple[str, List[Dict]]:
++    """
++    Parse response to extract tool calls if present.
++    Returns (cleaned_response, tool_calls_list)
++    Tool calls should be in format: <tool_call>{"tool": "name", "arguments": {...}}</tool_call>
++    """
++    tool_calls = []
++
++    # Look for tool_call tags
++    pattern = r'<tool_call>(.*?)</tool_call>'
++    matches = re.findall(pattern, response, re.DOTALL)
++
++    for match in matches:
++        try:
++            tc = json.loads(match.strip())
++            tool_calls.append(tc)
++        except json.JSONDecodeError:
++            logger.warning(f"[Synthesis] Failed to parse tool call: {match[:100]}")
++
++    # Remove tool_call tags from response
++    cleaned = re.sub(pattern, '', response, flags=re.DOTALL).strip()
++
++    return cleaned, tool_calls
++
++
+ async def gather_and_synthesize_node(state: SearchAgentState) -> SearchAgentState:
+     """Gather all task results and synthesize into final response"""
+     logger.info("Gathering information and synthesizing response")
+@@ -680,10 +738,18 @@ async def gather_and_synthesize_node(state: SearchAgentState) -> SearchAgentStat
+             "completed_tasks": len(task_results)
+         }
+
++        # Get enabled tools for synthesis (in case more data is needed)
++        enabled_tool_names = state.get("enabled_tools", [])
++        all_tools = state.get("available_tools", [])
++        enabled_tools_only = [
++            tool for tool in all_tools
++            if tool.get("name") in enabled_tool_names
++        ]
++
+         prompt = create_information_synthesis_prompt(
+             user_query=state["input"],
+             gathered_information=synthesis_data,
+-            conversation_history=state.get("conversation_history", [])
++            conversation_history=state.get("conversation_history", []),
++            enabled_tools=enabled_tools_only
+         )
+
+         # Debug: Print full synthesis prompt
+@@ -702,11 +768,42 @@ async def gather_and_synthesize_node(state: SearchAgentState) -> SearchAgentStat
+         # Create LLM client based on state configuration
+         llm_client = get_llm_client_from_state(state)
+
+-        # OPT-6 fix: Single try-except block (removed duplicate fallback logic)
+-        markdown_response = await llm_client.generate_response(
+-            prompt=prompt,
+-            system_prompt=system_prompt
+-        )
++        # Synthesis loop with tool augmentation support
++        max_tool_iterations = 2  # Limit tool call iterations to avoid infinite loops
++        iteration = 0
++        current_task_results = task_results.copy()
++
++        while iteration < max_tool_iterations:
++            iteration += 1
++
++            markdown_response = await llm_client.generate_response(
++                prompt=prompt,
++                system_prompt=system_prompt
++            )
++
++            # Check if response contains tool calls for data augmentation
++            cleaned_response, tool_calls = parse_tool_calls_from_response(markdown_response)
++
++            if tool_calls and iteration < max_tool_iterations:
++                # Execute tool calls to augment data
++                state["thinking_steps"].append(f"🔄 Synthesis requesting {len(tool_calls)} additional tool call(s)")
++                logger.info(f"[Synthesis] Iteration {iteration}: executing {len(tool_calls)} tool calls")
++
++                augmented_results = await execute_synthesis_tool_calls(tool_calls, state)
++                current_task_results.extend(augmented_results)
++
++                # Regenerate prompt with augmented data
++                synthesis_data["task_results"] = current_task_results
++                synthesis_data["completed_tasks"] = len(current_task_results)
++                prompt = create_information_synthesis_prompt(
++                    user_query=state["input"],
++                    gathered_information=synthesis_data,
++                    conversation_history=state.get("conversation_history", []),
++                    enabled_tools=enabled_tools_only
++                )
++                state["thinking_steps"].append(f"📊 Added {len(augmented_results)} results, regenerating response")
++            else:
++                # No tool calls or max iterations reached - use cleaned response
++                markdown_response = cleaned_response if cleaned_response else markdown_response
++                break
+
+         state["thinking_steps"].append("✅ Received markdown response from LLM")
+         logger.info(f"✓ Markdown generation successful: {len(markdown_response)} chars")

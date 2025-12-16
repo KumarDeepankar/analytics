@@ -1,0 +1,34 @@
+--- a/analytical_mcp/server.py
++++ b/analytical_mcp/server.py
+@@ -1116,6 +1116,31 @@ def _generate_chart_config(
+     return charts
+
+
++# ============================================================================
++# GET EVENT THEME BY DOCID
++# ============================================================================
++
++@mcp.tool(description="Get event_theme by docid.")
++async def get_event_theme(docid: str) -> ToolResult:
++    """Retrieve event_theme for a document by docid."""
++    search_body = {
++        "query": {"term": {"docid": docid}},
++        "size": 1,
++        "_source": ["docid", "event_theme"]
++    }
++
++    try:
++        data = await opensearch_request("POST", f"{INDEX_NAME}/_search", search_body)
++    except Exception as e:
++        return ToolResult(content=[], structured_content={"error": str(e)})
++
++    hits = data.get("hits", {}).get("hits", [])
++    if not hits:
++        return ToolResult(content=[], structured_content={"error": f"No doc found: {docid}"})
++
++    return ToolResult(content=[], structured_content=hits[0].get("_source", {}))
++
++
+ # ============================================================================
+ # STARTUP
+ # ============================================================================

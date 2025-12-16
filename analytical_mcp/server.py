@@ -71,59 +71,61 @@ RESULT_FIELDS = os.getenv(
 # Valid date histogram intervals
 VALID_DATE_INTERVALS = ["year", "quarter", "month", "week", "day"]
 
-# Document ID field for aggregations
-DOC_ID_FIELD = os.getenv("DOC_ID_FIELD", "rid")
 
 # ============================================================================
 # DYNAMIC DOCSTRING
 # ============================================================================
 
-ANALYTICS_DOCSTRING = f"""Analyze events data with filtering, grouping, and statistics.
+ANALYTICS_DOCSTRING = f"""Events analytics tool. Query with filters and/or aggregations.
 
-## RULE
-Provide at least ONE of: filters OR aggregation (group_by/date_histogram/stats_fields/numeric_histogram)
+<fields>
+keyword: {', '.join(KEYWORD_FIELDS)}
+numeric: {', '.join(NUMERIC_FIELDS)}
+date: {', '.join(DATE_FIELDS)}
+</fields>
 
-## FIELDS
+<parameters>
+filters: JSON - exact match {{"country": "India", "year": 2023}}
+range_filters: JSON - range {{"year": {{"gte": 2020, "lte": 2024}}}}
+group_by: str - single "country" or nested "country,year"
+date_histogram: JSON - {{"field": "event_date", "interval": "year|quarter|month|week|day"}}
+numeric_histogram: JSON - {{"field": "event_count", "interval": 100}}
+stats_fields: str - "event_count" returns min/max/avg/sum/count/std_dev
+top_n: int - max buckets (default 20)
+top_n_per_group: int - nested buckets (default 5)
+include_samples: bool - return sample docs (default false)
+sample_size: int - samples per bucket (default 3)
+</parameters>
 
-Keyword: {', '.join(KEYWORD_FIELDS)} → use in filters, group_by
-Numeric: {', '.join(NUMERIC_FIELDS)} → use in filters, range_filters, group_by, stats_fields
-Date: {', '.join(DATE_FIELDS)} → use in filters, range_filters, date_histogram
+<date_formats>
+"2023" → full year | "Q1 2023" → quarter | "2023-06" → month | "2023-06-15" → exact
+</date_formats>
 
-## PARAMETERS
+<examples>
+Top countries: group_by="country", top_n=10
+Country by theme: group_by="country,event_theme", top_n=5, top_n_per_group=3
+Monthly trend: date_histogram='{{"field": "event_date", "interval": "month"}}'
+Yearly trend: date_histogram='{{"field": "event_date", "interval": "year"}}'
+Quarterly trend: date_histogram='{{"field": "event_date", "interval": "quarter"}}'
+Weekly trend: date_histogram='{{"field": "event_date", "interval": "week"}}'
+Daily trend: date_histogram='{{"field": "event_date", "interval": "day"}}'
+Year distribution: numeric_histogram='{{"field": "year", "interval": 1}}'
+Event stats: stats_fields="event_count"
+Filter + group: filters='{{"country": "India"}}', group_by="event_theme"
+Filter by year: filters='{{"year": 2023}}', group_by="country"
+Filter by date: filters='{{"event_date": "Q1 2023"}}', group_by="event_theme"
+Filter + trend: filters='{{"country": "India"}}', date_histogram='{{"field": "event_date", "interval": "month"}}'
+Range + group: range_filters='{{"year": {{"gte": 2022}}}}', group_by="country"
+Date range: range_filters='{{"event_date": {{"gte": "2023-01-01", "lte": "2023-12-31"}}}}', group_by="country"
+Get samples: filters='{{"country": "India"}}', include_samples=true
+</examples>
 
-AGGREGATIONS (use at least one, or use filters alone):
-  group_by          : str  : "country" or "country,year,event_theme" (nested)
-  date_histogram    : JSON : {{"field": "event_date", "interval": "year|quarter|month|week|day"}}
-  numeric_histogram : JSON : {{"field": "event_count", "interval": 100}}
-  stats_fields      : str  : "event_count" → returns min, max, avg, sum, count, std_dev
-
-FILTERS (optional):
-  filters       : JSON : {{"country": "India", "year": 2023}}
-  range_filters : JSON : {{"year": {{"gte": 2020, "lte": 2024}}}}
-
-Date filter formats: "2023" (year) | "Q1 2023" (quarter) | "2023-06" (month) | "2023-06-15" (exact)
-
-CONTROLS (optional):
-  top_n=20, top_n_per_group=5, sort_by="count", sort_order="desc", include_samples=false, sample_size=3
-
-## EXAMPLES
-
-group_by="country", top_n=10
-group_by="country,year,event_theme", top_n=5, top_n_per_group=3
-date_histogram='{{"field": "event_date", "interval": "month"}}'
-numeric_histogram='{{"field": "event_count", "interval": 100}}'
-stats_fields="event_count"
-filters='{{"country": "India"}}', include_samples=true
-filters='{{"country": "India"}}', group_by="event_theme"
-range_filters='{{"year": {{"gte": 2022}}}}', group_by="country"
-
-## RESPONSE
-
-status: "success" | error status with suggestions
-mode: "filter_only" | "aggregation"
-data_context: documents_matched, total_documents_in_index, match_percentage
-aggregations: group_by buckets, stats, date_histogram, numeric_histogram results
-chart_config: [{{"type": "bar|line", "labels": [...], "data": [...]}}]
+<rules>
+- Provide at least one: filters OR aggregation (group_by/date_histogram/stats_fields/numeric_histogram)
+- Use keyword fields for filters and group_by
+- Use numeric fields for stats_fields and numeric_histogram
+- Use date fields for date_histogram
+</rules>
 """
 
 # ============================================================================
@@ -745,14 +747,7 @@ async def analyze_events(
         "query": query_body,
         "size": sample_size if (filter_only_mode and include_samples) else 0,
         "track_total_hits": True,
-        "aggs": {
-            "total_unique_docs": {
-                "cardinality": {
-                    "field": DOC_ID_FIELD,
-                    "precision_threshold": 10000
-                }
-            }
-        }
+        "aggs": {}
     }
 
     # For filter-only mode, add _source fields if samples requested
@@ -768,9 +763,7 @@ async def analyze_events(
 
             agg: Dict[str, Any] = {
                 "terms": {"field": field, "size": size},
-                "aggs": {
-                    "unique_docs": {"cardinality": {"field": DOC_ID_FIELD}}
-                }
+                "aggs": {}
             }
 
             # Add sorting at top level
@@ -819,9 +812,6 @@ async def analyze_events(
                 "format": format_map.get(interval, "yyyy-MM-dd"),
                 "min_doc_count": 0,
                 "order": {"_key": "asc"}
-            },
-            "aggs": {
-                "unique_docs": {"cardinality": {"field": DOC_ID_FIELD}}
             }
         }
 
@@ -835,9 +825,6 @@ async def analyze_events(
                 "range": {
                     "field": field,
                     "ranges": parsed_numeric_histogram["ranges"]
-                },
-                "aggs": {
-                    "unique_docs": {"cardinality": {"field": DOC_ID_FIELD}}
                 }
             }
         else:
@@ -848,9 +835,6 @@ async def analyze_events(
                     "field": field,
                     "interval": interval,
                     "min_doc_count": 0
-                },
-                "aggs": {
-                    "unique_docs": {"cardinality": {"field": DOC_ID_FIELD}}
                 }
             }
 
@@ -873,15 +857,15 @@ async def analyze_events(
 
     total_hits = data.get("hits", {}).get("total", {}).get("value", 0)
     aggs = data.get("aggregations", {})
-    unique_docs = int(aggs.get("total_unique_docs", {}).get("value", total_hits))
+    total_matched = total_hits  # Using total_hits directly instead of cardinality
 
     # Data context
     data_context = {
         "index_name": INDEX_NAME,
         "total_documents_in_index": metadata.total_documents,
-        "documents_matched": unique_docs,
+        "documents_matched": total_matched,
         "match_percentage": round(
-            (unique_docs / metadata.total_documents * 100)
+            (total_matched / metadata.total_documents * 100)
             if metadata.total_documents > 0 else 0,
             2
         ),
@@ -911,10 +895,10 @@ async def analyze_events(
             for b in buckets:
                 item = {
                     "key": b["key"],
-                    "count": int(b.get("unique_docs", {}).get("value", b["doc_count"])),
+                    "count": b["doc_count"],
                     "percentage": round(
-                        b.get("unique_docs", {}).get("value", b["doc_count"]) / unique_docs * 100
-                        if unique_docs > 0 else 0,
+                        b["doc_count"] / total_matched * 100
+                        if total_matched > 0 else 0,
                         1
                     )
                 }
@@ -938,7 +922,7 @@ async def analyze_events(
 
         # Calculate other count
         top_n_count = sum(r["count"] for r in group_results)
-        other_count = unique_docs - top_n_count
+        other_count = total_matched - top_n_count
 
         aggregations["group_by"] = {
             "fields": group_by_fields,
@@ -957,10 +941,10 @@ async def analyze_events(
             "buckets": [
                 {
                     "date": b.get("key_as_string", b.get("key")),
-                    "count": int(b.get("unique_docs", {}).get("value", b["doc_count"])),
+                    "count": b["doc_count"],
                     "percentage": round(
-                        b.get("unique_docs", {}).get("value", b["doc_count"]) / unique_docs * 100
-                        if unique_docs > 0 else 0,
+                        b["doc_count"] / total_matched * 100
+                        if total_matched > 0 else 0,
                         1
                     )
                 }
@@ -987,10 +971,10 @@ async def analyze_events(
                 "range": label,
                 "from": b.get("from") if is_range else b.get("key"),
                 "to": b.get("to") if is_range else (b.get("key", 0) + parsed_numeric_histogram.get("interval", 10)),
-                "count": int(b.get("unique_docs", {}).get("value", b["doc_count"])),
+                "count": b["doc_count"],
                 "percentage": round(
-                    b.get("unique_docs", {}).get("value", b["doc_count"]) / unique_docs * 100
-                    if unique_docs > 0 else 0,
+                    b["doc_count"] / total_matched * 100
+                    if total_matched > 0 else 0,
                     1
                 )
             })
@@ -1132,6 +1116,31 @@ def _generate_chart_config(
             })
 
     return charts
+
+
+# ============================================================================
+# GET EVENT THEME BY DOCID
+# ============================================================================
+
+@mcp.tool(description="Get event_theme by docid.")
+async def get_event_theme(docid: str) -> ToolResult:
+    """Retrieve event_theme for a document by docid."""
+    search_body = {
+        "query": {"term": {"docid": docid}},
+        "size": 1,
+        "_source": ["docid", "event_theme"]
+    }
+
+    try:
+        data = await opensearch_request("POST", f"{INDEX_NAME}/_search", search_body)
+    except Exception as e:
+        return ToolResult(content=[], structured_content={"error": str(e)})
+
+    hits = data.get("hits", {}).get("hits", [])
+    if not hits:
+        return ToolResult(content=[], structured_content={"error": f"No doc found: {docid}"})
+
+    return ToolResult(content=[], structured_content=hits[0].get("_source", {}))
 
 
 # ============================================================================

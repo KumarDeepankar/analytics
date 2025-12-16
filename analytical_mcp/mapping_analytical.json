@@ -1,0 +1,56 @@
+{
+  "settings": {
+    "number_of_shards": 1,
+    "number_of_replicas": 0
+  },
+  "mappings": {
+    "properties": {
+      "rid": { "type": "keyword" },
+      "docid": { "type": "keyword" },
+      "url": { "type": "keyword" },
+
+      "country": {
+        "type": "keyword",
+        "fields": {
+          "search": {
+            "type": "text",
+            "analyzer": "standard"
+          }
+        }
+      },
+      "event_title": {
+        "type": "keyword",
+        "fields": {
+          "search": {
+            "type": "text",
+            "analyzer": "standard"
+          }
+        }
+      },
+      "event_theme": {
+        "type": "keyword",
+        "fields": {
+          "search": {
+            "type": "text",
+            "analyzer": "standard"
+          }
+        }
+      },
+
+      "year": { "type": "integer" },
+      "event_count": { "type": "integer" },
+
+      "event_date": {
+        "type": "date",
+        "format": "yyyy-MM-dd||yyyy-MM-dd'T'HH:mm:ss||epoch_millis"
+      },
+
+      "event_summary": { "type": "keyword", "index": false },
+      "event_highlight": { "type": "keyword", "index": false },
+      "event_conclusion": { "type": "keyword", "index": false },
+      "commentary_summary": { "type": "keyword", "index": false },
+      "next_event_plan": { "type": "keyword", "index": false },
+      "next_event_suggestion": { "type": "keyword", "index": false }
+    }
+  }
+}

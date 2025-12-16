@@ -1,0 +1,1179 @@
+#!/usr/bin/env python3
+"""
+Analytical MCP Server - Pure Analytics with Fuzzy Matching
+
+A FastMCP server that provides:
+- Keyword, integer, and date field filtering only (no text search)
+- Universal fuzzy matching on all field types
+- Strong guardrails for consistent results
+- Rich contextual responses with full metadata
+"""
+import os
+import json
+import logging
+import ssl
+from typing import Optional, Literal, List, Dict, Any
+import aiohttp
+from fastmcp import FastMCP
+from fastmcp.tools.tool import ToolResult
+
+from index_metadata import IndexMetadata
+from input_validator import InputValidator
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+# ============================================================================
+# CONFIGURATION
+# ============================================================================
+
+# OpenSearch configuration
+OPENSEARCH_URL = os.getenv("OPENSEARCH_URL", "https://98.93.206.97:9200")
+OPENSEARCH_USERNAME = os.getenv("OPENSEARCH_USERNAME", "admin")
+OPENSEARCH_PASSWORD = os.getenv("OPENSEARCH_PASSWORD", "admin")
+INDEX_NAME = os.getenv("INDEX_NAME", "events_analytics_v2")
+
+# Field configuration
+KEYWORD_FIELDS = os.getenv(
+    "KEYWORD_FIELDS",
+    "country,event_title,event_theme,rid,docid,url"
+).split(",")
+
+# Fields that support fuzzy search via .search sub-field (multi-field mapping)
+FUZZY_SEARCH_FIELDS = os.getenv(
+    "FUZZY_SEARCH_FIELDS",
+    "country,event_title,event_theme"
+).split(",")
+
+NUMERIC_FIELDS = os.getenv("NUMERIC_FIELDS", "year,event_count").split(",")
+
+DATE_FIELDS = os.getenv("DATE_FIELDS", "event_date").split(",")
+
+# Non-indexed display fields (retrieved but not filterable)
+DISPLAY_FIELDS = os.getenv(
+    "DISPLAY_FIELDS",
+    "event_summary,event_highlight,event_conclusion,commentary_summary,next_event_plan,next_event_suggestion"
+).split(",")
+
+# All filterable fields
+ALL_FILTER_FIELDS = KEYWORD_FIELDS + NUMERIC_FIELDS + DATE_FIELDS
+
+# Result fields to return
+RESULT_FIELDS = os.getenv(
+    "RESULT_FIELDS",
+    "rid,docid,event_title,event_theme,country,year,event_date,url"
+).split(",")
+
+# Valid date histogram intervals
+VALID_DATE_INTERVALS = ["year", "quarter", "month", "week", "day"]
+
+# Document ID field for aggregations
+DOC_ID_FIELD = os.getenv("DOC_ID_FIELD", "rid")
+
+# ============================================================================
+# DYNAMIC DOCSTRING
+# ============================================================================
+
+ANALYTICS_DOCSTRING = f"""Analyze events data with filtering, grouping, and statistics.
+
+## RULE
+Provide at least ONE of: filters OR aggregation (group_by/date_histogram/stats_fields/numeric_histogram)
+
+## FIELDS
+
+Keyword: {', '.join(KEYWORD_FIELDS)} → use in filters, group_by
+Numeric: {', '.join(NUMERIC_FIELDS)} → use in filters, range_filters, group_by, stats_fields
+Date: {', '.join(DATE_FIELDS)} → use in filters, range_filters, date_histogram
+
+## PARAMETERS
+
+AGGREGATIONS (use at least one, or use filters alone):
+  group_by          : str  : "country" or "country,year,event_theme" (nested)
+  date_histogram    : JSON : {{"field": "event_date", "interval": "year|quarter|month|week|day"}}
+  numeric_histogram : JSON : {{"field": "event_count", "interval": 100}}
+  stats_fields      : str  : "event_count" → returns min, max, avg, sum, count, std_dev
+
+FILTERS (optional):
+  filters       : JSON : {{"country": "India", "year": 2023}}
+  range_filters : JSON : {{"year": {{"gte": 2020, "lte": 2024}}}}
+
+Date filter formats: "2023" (year) | "Q1 2023" (quarter) | "2023-06" (month) | "2023-06-15" (exact)
+
+CONTROLS (optional):
+  top_n=20, top_n_per_group=5, sort_by="count", sort_order="desc", include_samples=false, sample_size=3
+
+## EXAMPLES
+
+group_by="country", top_n=10
+group_by="country,year,event_theme", top_n=5, top_n_per_group=3
+date_histogram='{{"field": "event_date", "interval": "month"}}'
+numeric_histogram='{{"field": "event_count", "interval": 100}}'
+stats_fields="event_count"
+filters='{{"country": "India"}}', include_samples=true
+filters='{{"country": "India"}}', group_by="event_theme"
+range_filters='{{"year": {{"gte": 2022}}}}', group_by="country"
+
+## RESPONSE
+
+status: "success" | error status with suggestions
+mode: "filter_only" | "aggregation"
+data_context: documents_matched, total_documents_in_index, match_percentage
+aggregations: group_by buckets, stats, date_histogram, numeric_histogram results
+chart_config: [{{"type": "bar|line", "labels": [...], "data": [...]}}]
+"""
+
+# ============================================================================
+# INITIALIZE SERVER
+# ============================================================================
+
+mcp = FastMCP("Analytical Events Server")
+
+# Global instances
+metadata = IndexMetadata()
+validator: Optional[InputValidator] = None
+
+
+# ============================================================================
+# OPENSEARCH CLIENT
+# ============================================================================
+
+async def opensearch_request(method: str, path: str, body: Optional[dict] = None) -> dict:
+    """Make async HTTP request to OpenSearch with basic authentication."""
+    url = f"{OPENSEARCH_URL}/{path}"
+    auth = aiohttp.BasicAuth(OPENSEARCH_USERNAME, OPENSEARCH_PASSWORD)
+
+    # SSL context for HTTPS
+    ssl_context = None
+    if OPENSEARCH_URL.startswith("https://"):
+        ssl_context = ssl.create_default_context()
+        ssl_context.check_hostname = False
+        ssl_context.verify_mode = ssl.CERT_NONE
+
+    try:
+        connector = aiohttp.TCPConnector(ssl=ssl_context if ssl_context else False)
+        timeout = aiohttp.ClientTimeout(total=30)
+
+        async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
+            if method == "GET":
+                async with session.get(url, auth=auth) as response:
+                    if response.status == 200:
+                        return await response.json()
+                    else:
+                        error_text = await response.text()
+                        raise Exception(f"OpenSearch error ({response.status}): {error_text}")
+
+            elif method == "POST":
+                headers = {"Content-Type": "application/json"}
+                async with session.post(url, json=body, headers=headers, auth=auth) as response:
+                    if response.status in [200, 201]:
+                        return await response.json()
+                    else:
+                        error_text = await response.text()
+                        raise Exception(f"OpenSearch error ({response.status}): {error_text}")
+
+    except aiohttp.ClientError as e:
+        logger.error(f"HTTP request failed: {e}")
+        raise Exception(f"Failed to connect to OpenSearch at {OPENSEARCH_URL}: {str(e)}")
+
+
+# ============================================================================
+# FUZZY MATCHING VIA OPENSEARCH
+# ============================================================================
+
+async def resolve_keyword_filter(
+    field: str,
+    value: str,
+    use_fuzzy: bool = True
+) -> Dict[str, Any]:
+    """
+    Resolve a keyword filter value using OpenSearch.
+
+    Strategy:
+    1. Try exact match on keyword field
+    2. If no match and field supports fuzzy, try fuzzy match on .search field
+    3. Return match metadata for transparency
+
+    Returns:
+        {
+            "match_type": "exact" | "approximate" | "none",
+            "query_value": original value,
+            "matched_values": [list of matched values],
+            "filter_clause": OpenSearch filter clause or None,
+            "confidence": 100 for exact, <100 for fuzzy
+        }
+    """
+    # Step 1: Check exact match exists
+    exact_query = {
+        "size": 0,
+        "query": {"term": {field: value}},
+        "aggs": {"check": {"terms": {"field": field, "size": 1}}}
+    }
+
+    try:
+        result = await opensearch_request("POST", f"{INDEX_NAME}/_search", exact_query)
+        hits = result.get("hits", {}).get("total", {}).get("value", 0)
+
+        if hits > 0:
+            # Exact match found
+            return {
+                "match_type": "exact",
+                "query_value": value,
+                "matched_values": [value],
+                "filter_clause": {"term": {field: value}},
+                "confidence": 100,
+                "hit_count": hits
+            }
+    except Exception as e:
+        logger.warning(f"Exact match query failed: {e}")
+
+    # Step 2: Try case-insensitive match via lowercase comparison
+    # Use terms aggregation to find the actual value
+    case_query = {
+        "size": 0,
+        "aggs": {
+            "all_values": {
+                "terms": {"field": field, "size": 1000}
+            }
+        }
+    }
+
+    try:
+        result = await opensearch_request("POST", f"{INDEX_NAME}/_search", case_query)
+        buckets = result.get("aggregations", {}).get("all_values", {}).get("buckets", [])
+
+        # Check for case-insensitive match
+        value_lower = value.lower().strip()
+        for bucket in buckets:
+            if str(bucket["key"]).lower() == value_lower:
+                matched_value = bucket["key"]
+                return {
+                    "match_type": "exact",  # Case-insensitive is still considered exact
+                    "query_value": value,
+                    "matched_values": [matched_value],
+                    "filter_clause": {"term": {field: matched_value}},
+                    "confidence": 100,
+                    "hit_count": bucket["doc_count"],
+                    "note": f"Case-normalized: '{value}' -> '{matched_value}'"
+                }
+    except Exception as e:
+        logger.warning(f"Case-insensitive query failed: {e}")
+
+    # Step 3: Try fuzzy match on .search field if supported
+    if use_fuzzy and field in FUZZY_SEARCH_FIELDS:
+        search_field = f"{field}.search"
+        fuzzy_query = {
+            "size": 0,
+            "query": {
+                "match": {
+                    search_field: {
+                        "query": value,
+                        "fuzziness": "AUTO",
+                        "prefix_length": 1
+                    }
+                }
+            },
+            "aggs": {
+                "matched_values": {
+                    "terms": {"field": field, "size": 10}
+                }
+            }
+        }
+
+        try:
+            result = await opensearch_request("POST", f"{INDEX_NAME}/_search", fuzzy_query)
+            hits = result.get("hits", {}).get("total", {}).get("value", 0)
+            buckets = result.get("aggregations", {}).get("matched_values", {}).get("buckets", [])
+
+            if hits > 0 and buckets:
+                matched_values = [b["key"] for b in buckets]
+
+                # Calculate confidence based on string similarity
+                from rapidfuzz import fuzz
+                best_match = matched_values[0]
+                confidence = fuzz.ratio(value.lower(), str(best_match).lower())
+
+                # IMPORTANT: Before accepting a fuzzy match with low confidence,
+                # check if there's an EXACT match in another field
+                if confidence < 90:
+                    cross_field_matches = await search_value_across_fields(value, exclude_field=field)
+                    exact_cross_matches = [m for m in cross_field_matches if m["match_type"] == "exact"]
+
+                    if exact_cross_matches:
+                        # Found exact match in different field - suggest that instead
+                        return {
+                            "match_type": "wrong_field",
+                            "query_value": value,
+                            "matched_values": [],
+                            "filter_clause": None,
+                            "confidence": 0,
+                            "hit_count": 0,
+                            "wrong_field": field,
+                            "fuzzy_would_match": {"field": field, "value": best_match, "confidence": confidence},
+                            "did_you_mean": exact_cross_matches
+                        }
+
+                # Build filter for all matched values
+                if len(matched_values) == 1:
+                    filter_clause = {"term": {field: matched_values[0]}}
+                else:
+                    filter_clause = {"terms": {field: matched_values}}
+
+                return {
+                    "match_type": "approximate",
+                    "query_value": value,
+                    "matched_values": matched_values,
+                    "filter_clause": filter_clause,
+                    "confidence": round(confidence, 1),
+                    "hit_count": hits,
+                    "warning": f"Fuzzy match: '{value}' matched to {matched_values}"
+                }
+        except Exception as e:
+            logger.warning(f"Fuzzy match query failed: {e}")
+
+    # No match found in specified field - search across ALL keyword fields
+    cross_field_matches = await search_value_across_fields(value, exclude_field=field)
+
+    if cross_field_matches:
+        # Found in a different field!
+        return {
+            "match_type": "wrong_field",
+            "query_value": value,
+            "matched_values": [],
+            "filter_clause": None,
+            "confidence": 0,
+            "hit_count": 0,
+            "wrong_field": field,
+            "did_you_mean": cross_field_matches
+        }
+
+    # No match found anywhere
+    return {
+        "match_type": "none",
+        "query_value": value,
+        "matched_values": [],
+        "filter_clause": None,
+        "confidence": 0,
+        "hit_count": 0
+    }
+
+
+async def search_value_across_fields(value: str, exclude_field: str = None) -> List[Dict[str, Any]]:
+    """
+    Search for a value across all keyword fields.
+    Returns list of matches with field name and matched value.
+    Used for "did you mean?" suggestions when value is in wrong field.
+    """
+    matches = []
+    value_lower = value.lower().strip()
+
+    search_fields = [f for f in FUZZY_SEARCH_FIELDS if f != exclude_field]
+
+    for field in search_fields:
+        # Try exact/case-insensitive match first
+        exact_query = {
+            "size": 0,
+            "aggs": {
+                "values": {
+                    "terms": {"field": field, "size": 100}
+                }
+            }
+        }
+
+        try:
+            result = await opensearch_request("POST", f"{INDEX_NAME}/_search", exact_query)
+            buckets = result.get("aggregations", {}).get("values", {}).get("buckets", [])
+
+            for bucket in buckets:
+                bucket_value = str(bucket["key"])
+                if bucket_value.lower() == value_lower:
+                    # Exact match in different field
+                    matches.append({
+                        "field": field,
+                        "value": bucket_value,
+                        "match_type": "exact",
+                        "confidence": 100,
+                        "doc_count": bucket["doc_count"]
+                    })
+                    break
+
+            # If no exact match, try fuzzy
+            if not any(m["field"] == field for m in matches):
+                from rapidfuzz import fuzz
+                for bucket in buckets:
+                    bucket_value = str(bucket["key"])
+                    score = fuzz.ratio(value_lower, bucket_value.lower())
+                    if score >= 75:  # Fuzzy threshold
+                        matches.append({
+                            "field": field,
+                            "value": bucket_value,
+                            "match_type": "fuzzy",
+                            "confidence": score,
+                            "doc_count": bucket["doc_count"]
+                        })
+                        break
+
+        except Exception as e:
+            logger.warning(f"Cross-field search failed for {field}: {e}")
+
+    # Sort by confidence
+    matches.sort(key=lambda x: x["confidence"], reverse=True)
+    return matches
+
+
+# ============================================================================
+# MAIN ANALYTICS TOOL
+# ============================================================================
+
+@mcp.tool(description=ANALYTICS_DOCSTRING)
+async def analyze_events(
+    filters: Optional[str] = None,
+    range_filters: Optional[str] = None,
+    group_by: Optional[str] = None,
+    date_histogram: Optional[str] = None,
+    numeric_histogram: Optional[str] = None,
+    stats_fields: Optional[str] = None,
+    sort_by: Optional[str] = None,
+    sort_order: Optional[Literal["asc", "desc"]] = "desc",
+    top_n: int = 20,
+    top_n_per_group: int = 5,
+    include_samples: bool = False,
+    sample_size: int = 3
+) -> ToolResult:
+    """
+    Analyze events with filtering, grouping, and statistics.
+    All inputs are validated and normalized with fuzzy matching.
+    Requires at least one: filter OR aggregation (group_by/date_histogram/stats_fields).
+    """
+    global validator
+
+    if validator is None:
+        return ToolResult(content=[], structured_content={
+            "error": "Server not initialized. Please wait and retry."
+        })
+
+    warnings: List[str] = []
+    match_metadata: Dict[str, Any] = {}  # Track match types for transparency
+    query_context: Dict[str, Any] = {
+        "filters_applied": {},
+        "filters_normalized": {},
+        "range_filters_applied": {},
+        "aggregations": []
+    }
+
+    # ===== PARSE JSON PARAMETERS =====
+
+    parsed_filters = {}
+    if filters:
+        try:
+            parsed_filters = json.loads(filters)
+        except json.JSONDecodeError as e:
+            return ToolResult(content=[], structured_content={
+                "error": f"Invalid filters JSON: {e}"
+            })
+
+    parsed_range_filters = {}
+    if range_filters:
+        try:
+            parsed_range_filters = json.loads(range_filters)
+        except json.JSONDecodeError as e:
+            return ToolResult(content=[], structured_content={
+                "error": f"Invalid range_filters JSON: {e}"
+            })
+
+    parsed_date_histogram = None
+    if date_histogram:
+        try:
+            parsed_date_histogram = json.loads(date_histogram)
+            if "field" not in parsed_date_histogram:
+                return ToolResult(content=[], structured_content={
+                    "error": "date_histogram requires 'field' parameter"
+                })
+            if parsed_date_histogram["field"] not in DATE_FIELDS:
+                return ToolResult(content=[], structured_content={
+                    "error": f"Invalid date_histogram field. Valid: {', '.join(DATE_FIELDS)}"
+                })
+            if "interval" not in parsed_date_histogram:
+                parsed_date_histogram["interval"] = "month"
+            elif parsed_date_histogram["interval"] not in VALID_DATE_INTERVALS:
+                return ToolResult(content=[], structured_content={
+                    "error": f"Invalid interval. Valid: {', '.join(VALID_DATE_INTERVALS)}"
+                })
+        except json.JSONDecodeError as e:
+            return ToolResult(content=[], structured_content={
+                "error": f"Invalid date_histogram JSON: {e}"
+            })
+
+    # Parse numeric_histogram
+    parsed_numeric_histogram = None
+    if numeric_histogram:
+        try:
+            parsed_numeric_histogram = json.loads(numeric_histogram)
+            if "field" not in parsed_numeric_histogram:
+                return ToolResult(content=[], structured_content={
+                    "error": "numeric_histogram requires 'field' parameter"
+                })
+            if parsed_numeric_histogram["field"] not in NUMERIC_FIELDS:
+                return ToolResult(content=[], structured_content={
+                    "error": f"Invalid numeric_histogram field. Valid: {', '.join(NUMERIC_FIELDS)}"
+                })
+            # Must have either interval or ranges
+            if "interval" not in parsed_numeric_histogram and "ranges" not in parsed_numeric_histogram:
+                parsed_numeric_histogram["interval"] = 10  # Default interval
+        except json.JSONDecodeError as e:
+            return ToolResult(content=[], structured_content={
+                "error": f"Invalid numeric_histogram JSON: {e}"
+            })
+
+    parsed_stats_fields = []
+    if stats_fields:
+        parsed_stats_fields = [f.strip() for f in stats_fields.split(",") if f.strip()]
+        for sf in parsed_stats_fields:
+            if sf not in NUMERIC_FIELDS:
+                return ToolResult(content=[], structured_content={
+                    "error": f"Invalid stats field '{sf}'. Valid: {', '.join(NUMERIC_FIELDS)}"
+                })
+
+    # ===== VALIDATE AND NORMALIZE FILTERS =====
+
+    filter_clauses = []
+
+    for field, value in parsed_filters.items():
+        # Validate field name
+        field_result = validator.validate_field_name(field, ALL_FILTER_FIELDS)
+        if not field_result.valid:
+            return ToolResult(content=[], structured_content={
+                "error": f"Unknown filter field '{field}'",
+                "suggestions": field_result.suggestions
+            })
+        field = field_result.normalized_value
+
+        # Validate value based on field type
+        if field in KEYWORD_FIELDS:
+            # Use OpenSearch-based fuzzy resolution
+            resolve_result = await resolve_keyword_filter(field, str(value))
+
+            if resolve_result["match_type"] == "wrong_field":
+                # Value found in a DIFFERENT field - return "did you mean" suggestion
+                did_you_mean = resolve_result.get("did_you_mean", [])
+                suggestions = []
+                for match in did_you_mean:
+                    suggestions.append({
+                        "correct_field": match["field"],
+                        "value": match["value"],
+                        "confidence": match["confidence"],
+                        "doc_count": match["doc_count"],
+                        "suggested_filter": {match["field"]: match["value"]}
+                    })
+
+                return ToolResult(content=[], structured_content={
+                    "status": "did_you_mean",
+                    "error": f"'{value}' not found in field '{field}'",
+                    "message": f"Did you mean to filter by '{did_you_mean[0]['field']}' instead?",
+                    "you_searched": {"field": field, "value": value},
+                    "did_you_mean": suggestions,
+                    "suggested_query": {
+                        "filters": {did_you_mean[0]["field"]: did_you_mean[0]["value"]}
+                    }
+                })
+
+            if resolve_result["match_type"] == "none":
+                # No match found anywhere - return error with suggestions
+                top_values = metadata.get_keyword_top_values(field, 5)
+                return ToolResult(content=[], structured_content={
+                    "status": "no_match",
+                    "error": f"No match found for {field}: '{value}'",
+                    "you_searched": {"field": field, "value": value},
+                    "suggestions": [v["value"] for v in top_values],
+                    "top_values": top_values
+                })
+
+            # Store match metadata for transparency
+            match_metadata[field] = {
+                "match_type": resolve_result["match_type"],
+                "query_value": resolve_result["query_value"],
+                "matched_values": resolve_result["matched_values"],
+                "confidence": resolve_result["confidence"]
+            }
+
+            # Add warning if approximate match
+            if resolve_result["match_type"] == "approximate":
+                warnings.append(resolve_result.get("warning", f"Approximate match for {field}"))
+
+            if resolve_result.get("note"):
+                warnings.append(resolve_result["note"])
+
+            query_context["filters_normalized"][field] = {
+                "original": value,
+                "matched": resolve_result["matched_values"],
+                "match_type": resolve_result["match_type"],
+                "confidence": resolve_result["confidence"]
+            }
+
+            filter_clauses.append(resolve_result["filter_clause"])
+
+        elif field in NUMERIC_FIELDS:
+            result = validator.validate_integer(field, value)
+            if not result.valid:
+                return ToolResult(content=[], structured_content={
+                    "error": result.warnings[0] if result.warnings else f"Invalid integer: {value}",
+                    "suggestions": result.suggestions
+                })
+            warnings.extend(result.warnings)
+            filter_clauses.append({"term": {field: result.normalized_value}})
+
+        elif field in DATE_FIELDS:
+            result = validator.validate_date(field, str(value))
+            if not result.valid:
+                return ToolResult(content=[], structured_content={
+                    "error": result.warnings[0] if result.warnings else f"Invalid date: {value}",
+                    "suggestions": result.suggestions
+                })
+            warnings.extend(result.warnings)
+
+            # If date expanded to range, use range filter
+            if result.field_type == "date_range":
+                filter_clauses.append({"range": {field: result.normalized_value}})
+                query_context["filters_normalized"][field] = {
+                    "original": value,
+                    "expanded_to": result.normalized_value
+                }
+            else:
+                filter_clauses.append({"term": {field: result.normalized_value}})
+
+        query_context["filters_applied"][field] = value
+
+    # ===== VALIDATE AND NORMALIZE RANGE FILTERS =====
+
+    for field, range_spec in parsed_range_filters.items():
+        # Validate field name
+        field_result = validator.validate_field_name(field, NUMERIC_FIELDS + DATE_FIELDS)
+        if not field_result.valid:
+            return ToolResult(content=[], structured_content={
+                "error": f"Range filter not supported for '{field}'",
+                "suggestions": field_result.suggestions
+            })
+        field = field_result.normalized_value
+
+        if field in NUMERIC_FIELDS:
+            result = validator.validate_integer_range(field, range_spec)
+        else:
+            result = validator.validate_date_range(field, range_spec)
+
+        if not result.valid:
+            return ToolResult(content=[], structured_content={
+                "error": result.warnings[0] if result.warnings else "Invalid range filter",
+                "suggestions": result.suggestions
+            })
+
+        warnings.extend(result.warnings)
+        filter_clauses.append({"range": {field: result.normalized_value}})
+        query_context["range_filters_applied"][field] = result.normalized_value
+
+    # ===== VALIDATE GROUP BY (supports multi-level: "country,year") =====
+
+    group_by_fields = []
+    if group_by:
+        raw_fields = [f.strip() for f in group_by.split(",") if f.strip()]
+        for gf in raw_fields:
+            field_result = validator.validate_field_name(gf, KEYWORD_FIELDS + NUMERIC_FIELDS)
+            if not field_result.valid:
+                return ToolResult(content=[], structured_content={
+                    "error": f"Cannot group by '{gf}'",
+                    "suggestions": field_result.suggestions
+                })
+            group_by_fields.append(field_result.normalized_value)
+
+        if len(group_by_fields) == 1:
+            query_context["aggregations"].append(f"group_by:{group_by_fields[0]}")
+        else:
+            query_context["aggregations"].append(f"group_by:{' -> '.join(group_by_fields)}")
+
+    if parsed_date_histogram:
+        query_context["aggregations"].append(
+            f"date_histogram:{parsed_date_histogram['field']}:{parsed_date_histogram['interval']}"
+        )
+
+    if parsed_numeric_histogram:
+        interval_info = parsed_numeric_histogram.get("interval", "ranges")
+        query_context["aggregations"].append(
+            f"numeric_histogram:{parsed_numeric_histogram['field']}:{interval_info}"
+        )
+
+    if parsed_stats_fields:
+        query_context["aggregations"].append(f"stats:{','.join(parsed_stats_fields)}")
+
+    # ===== REQUIRE AT LEAST ONE: FILTER OR AGGREGATION =====
+
+    has_filters = bool(filter_clauses)
+    has_aggregation = bool(group_by_fields or parsed_date_histogram or parsed_numeric_histogram or parsed_stats_fields)
+
+    if not has_filters and not has_aggregation:
+        return ToolResult(content=[], structured_content={
+            "status": "empty_query",
+            "error": "Query is empty - specify filter or aggregation",
+            "message": "Provide at least one: filters OR (group_by / date_histogram / stats_fields)",
+            "examples": {
+                "filter_only": {"filters": "{\"country\": \"India\"}"},
+                "group_by_country": {"group_by": "country"},
+                "group_by_theme": {"group_by": "event_theme"},
+                "monthly_trend": {"date_histogram": "{\"field\": \"event_date\", \"interval\": \"month\"}"},
+                "stats": {"stats_fields": "event_count"},
+                "filter_and_group": {"filters": "{\"country\": \"India\"}", "group_by": "event_theme"}
+            },
+            "available_fields": {
+                "filters": ["country", "event_theme", "year", "event_date", "event_count"],
+                "group_by": ["country", "event_theme", "event_title", "year"],
+                "stats_fields": ["event_count", "year"],
+                "date_histogram": ["event_date"]
+            }
+        })
+
+    # Flag for filter-only mode (no aggregation)
+    filter_only_mode = has_filters and not has_aggregation
+
+    # ===== BUILD OPENSEARCH QUERY =====
+
+    query_body = {"match_all": {}} if not filter_clauses else {
+        "bool": {"filter": filter_clauses}
+    }
+
+    search_body: Dict[str, Any] = {
+        "query": query_body,
+        "size": sample_size if (filter_only_mode and include_samples) else 0,
+        "track_total_hits": True,
+        "aggs": {
+            "total_unique_docs": {
+                "cardinality": {
+                    "field": DOC_ID_FIELD,
+                    "precision_threshold": 10000
+                }
+            }
+        }
+    }
+
+    # For filter-only mode, add _source fields if samples requested
+    if filter_only_mode and include_samples:
+        search_body["_source"] = RESULT_FIELDS + DISPLAY_FIELDS
+
+    # Add group by aggregation (supports multi-level nesting)
+    if group_by_fields:
+        def build_nested_agg(fields: List[str], depth: int = 0) -> Dict[str, Any]:
+            """Recursively build nested terms aggregations."""
+            field = fields[0]
+            size = top_n if depth == 0 else top_n_per_group
+
+            agg: Dict[str, Any] = {
+                "terms": {"field": field, "size": size},
+                "aggs": {
+                    "unique_docs": {"cardinality": {"field": DOC_ID_FIELD}}
+                }
+            }
+
+            # Add sorting at top level
+            if depth == 0 and sort_by:
+                if sort_by in fields or sort_by == "count" or sort_by == "_count":
+                    if sort_by in fields:
+                        agg["terms"]["order"] = {"_key": sort_order or "desc"}
+                    else:
+                        agg["terms"]["order"] = {"_count": sort_order or "desc"}
+
+            # Add samples at the deepest level
+            if len(fields) == 1 and include_samples:
+                agg["aggs"]["samples"] = {
+                    "top_hits": {
+                        "size": sample_size,
+                        "_source": RESULT_FIELDS + DISPLAY_FIELDS
+                    }
+                }
+
+            # Recurse for nested levels
+            if len(fields) > 1:
+                nested_agg = build_nested_agg(fields[1:], depth + 1)
+                agg["aggs"]["nested"] = nested_agg
+
+            return agg
+
+        search_body["aggs"]["group_by_agg"] = build_nested_agg(group_by_fields)
+
+    # Add date histogram
+    if parsed_date_histogram:
+        field = parsed_date_histogram["field"]
+        interval = parsed_date_histogram["interval"]
+
+        format_map = {
+            "year": "yyyy",
+            "quarter": "yyyy-QQQ",
+            "month": "yyyy-MM",
+            "week": "yyyy-'W'ww",
+            "day": "yyyy-MM-dd"
+        }
+
+        search_body["aggs"]["date_histogram_agg"] = {
+            "date_histogram": {
+                "field": field,
+                "calendar_interval": interval,
+                "format": format_map.get(interval, "yyyy-MM-dd"),
+                "min_doc_count": 0,
+                "order": {"_key": "asc"}
+            },
+            "aggs": {
+                "unique_docs": {"cardinality": {"field": DOC_ID_FIELD}}
+            }
+        }
+
+    # Add numeric histogram
+    if parsed_numeric_histogram:
+        field = parsed_numeric_histogram["field"]
+
+        if "ranges" in parsed_numeric_histogram:
+            # Custom ranges: [{"to": 10}, {"from": 10, "to": 50}, {"from": 50}]
+            search_body["aggs"]["numeric_histogram_agg"] = {
+                "range": {
+                    "field": field,
+                    "ranges": parsed_numeric_histogram["ranges"]
+                },
+                "aggs": {
+                    "unique_docs": {"cardinality": {"field": DOC_ID_FIELD}}
+                }
+            }
+        else:
+            # Fixed interval histogram
+            interval = parsed_numeric_histogram.get("interval", 10)
+            search_body["aggs"]["numeric_histogram_agg"] = {
+                "histogram": {
+                    "field": field,
+                    "interval": interval,
+                    "min_doc_count": 0
+                },
+                "aggs": {
+                    "unique_docs": {"cardinality": {"field": DOC_ID_FIELD}}
+                }
+            }
+
+    # Add stats aggregations
+    for stats_field in parsed_stats_fields:
+        search_body["aggs"][f"{stats_field}_stats"] = {
+            "extended_stats": {"field": stats_field}
+        }
+
+    # ===== EXECUTE SEARCH =====
+
+    try:
+        data = await opensearch_request("POST", f"{INDEX_NAME}/_search", search_body)
+    except Exception as e:
+        return ToolResult(content=[], structured_content={
+            "error": f"Search failed: {str(e)}"
+        })
+
+    # ===== BUILD RESPONSE =====
+
+    total_hits = data.get("hits", {}).get("total", {}).get("value", 0)
+    aggs = data.get("aggregations", {})
+    unique_docs = int(aggs.get("total_unique_docs", {}).get("value", total_hits))
+
+    # Data context
+    data_context = {
+        "index_name": INDEX_NAME,
+        "total_documents_in_index": metadata.total_documents,
+        "documents_matched": unique_docs,
+        "match_percentage": round(
+            (unique_docs / metadata.total_documents * 100)
+            if metadata.total_documents > 0 else 0,
+            2
+        ),
+        "date_range": {
+            "min": metadata.date_ranges.get("event_date", {}).min if "event_date" in metadata.date_ranges else None,
+            "max": metadata.date_ranges.get("event_date", {}).max if "event_date" in metadata.date_ranges else None
+        }
+    }
+
+    # Extract samples for filter-only mode
+    filter_only_samples = []
+    if filter_only_mode:
+        hits = data.get("hits", {}).get("hits", [])
+        filter_only_samples = [h["_source"] for h in hits]
+
+    # Aggregation results
+    aggregations: Dict[str, Any] = {}
+
+    # Group by results (supports multi-level)
+    if group_by_fields and "group_by_agg" in aggs:
+
+        def extract_nested_buckets(agg_data: dict, fields: List[str], depth: int = 0) -> List[dict]:
+            """Recursively extract nested aggregation buckets."""
+            results = []
+            buckets = agg_data.get("buckets", [])
+
+            for b in buckets:
+                item = {
+                    "key": b["key"],
+                    "count": int(b.get("unique_docs", {}).get("value", b["doc_count"])),
+                    "percentage": round(
+                        b.get("unique_docs", {}).get("value", b["doc_count"]) / unique_docs * 100
+                        if unique_docs > 0 else 0,
+                        1
+                    )
+                }
+
+                # Add samples if present (at deepest level)
+                if "samples" in b:
+                    item["samples"] = [h["_source"] for h in b["samples"]["hits"]["hits"]]
+
+                # Recurse into nested aggregation
+                if "nested" in b and len(fields) > 1:
+                    item["sub_groups"] = {
+                        "field": fields[1],
+                        "buckets": extract_nested_buckets(b["nested"], fields[1:], depth + 1)
+                    }
+
+                results.append(item)
+
+            return results
+
+        group_results = extract_nested_buckets(aggs["group_by_agg"], group_by_fields)
+
+        # Calculate other count
+        top_n_count = sum(r["count"] for r in group_results)
+        other_count = unique_docs - top_n_count
+
+        aggregations["group_by"] = {
+            "fields": group_by_fields,
+            "multi_level": len(group_by_fields) > 1,
+            "buckets": group_results,
+            "total_groups": len(group_results),
+            "other_count": max(0, other_count)
+        }
+
+    # Date histogram results
+    if parsed_date_histogram and "date_histogram_agg" in aggs:
+        buckets = aggs["date_histogram_agg"].get("buckets", [])
+        aggregations["date_histogram"] = {
+            "field": parsed_date_histogram["field"],
+            "interval": parsed_date_histogram["interval"],
+            "buckets": [
+                {
+                    "date": b.get("key_as_string", b.get("key")),
+                    "count": int(b.get("unique_docs", {}).get("value", b["doc_count"])),
+                    "percentage": round(
+                        b.get("unique_docs", {}).get("value", b["doc_count"]) / unique_docs * 100
+                        if unique_docs > 0 else 0,
+                        1
+                    )
+                }
+                for b in buckets
+            ]
+        }
+
+    # Numeric histogram results
+    if parsed_numeric_histogram and "numeric_histogram_agg" in aggs:
+        buckets = aggs["numeric_histogram_agg"].get("buckets", [])
+        field = parsed_numeric_histogram["field"]
+        is_range = "ranges" in parsed_numeric_histogram
+
+        hist_buckets = []
+        for b in buckets:
+            if is_range:
+                # Range aggregation format
+                label = b.get("key", f"{b.get('from', '*')}-{b.get('to', '*')}")
+            else:
+                # Histogram format - bucket key is the lower bound
+                label = f"{b['key']}-{b['key'] + parsed_numeric_histogram.get('interval', 10)}"
+
+            hist_buckets.append({
+                "range": label,
+                "from": b.get("from") if is_range else b.get("key"),
+                "to": b.get("to") if is_range else (b.get("key", 0) + parsed_numeric_histogram.get("interval", 10)),
+                "count": int(b.get("unique_docs", {}).get("value", b["doc_count"])),
+                "percentage": round(
+                    b.get("unique_docs", {}).get("value", b["doc_count"]) / unique_docs * 100
+                    if unique_docs > 0 else 0,
+                    1
+                )
+            })
+
+        aggregations["numeric_histogram"] = {
+            "field": field,
+            "interval": parsed_numeric_histogram.get("interval"),
+            "custom_ranges": is_range,
+            "buckets": hist_buckets
+        }
+
+    # Stats results
+    if parsed_stats_fields:
+        aggregations["stats"] = {}
+        for stats_field in parsed_stats_fields:
+            stats_data = aggs.get(f"{stats_field}_stats", {})
+            aggregations["stats"][stats_field] = {
+                "min": stats_data.get("min"),
+                "max": stats_data.get("max"),
+                "avg": round(stats_data.get("avg", 0), 2) if stats_data.get("avg") else None,
+                "sum": stats_data.get("sum"),
+                "count": stats_data.get("count"),
+                "std_dev": round(stats_data.get("std_deviation", 0), 2) if stats_data.get("std_deviation") else None
+            }
+
+    # Generate chart config
+    chart_config = _generate_chart_config(aggregations, group_by_fields, parsed_date_histogram, parsed_numeric_histogram)
+
+    # Build filter_resolution - clear summary of what was actually searched
+    filter_resolution = {}
+    for field, meta in match_metadata.items():
+        matched = meta.get("matched_values", [])
+        if meta.get("match_type") == "exact":
+            filter_resolution[field] = {
+                "searched": matched[0] if len(matched) == 1 else matched,
+                "exact_match": True
+            }
+        else:
+            filter_resolution[field] = {
+                "you_searched": meta.get("query_value"),
+                "closest_match": matched[0] if matched else None,
+                "searched": matched[0] if len(matched) == 1 else matched,
+                "exact_match": False,
+                "confidence": meta.get("confidence")
+            }
+
+    # Check if all matches are exact
+    all_exact = all(
+        m.get("match_type") == "exact"
+        for m in match_metadata.values()
+    )
+
+    # Build final response
+    response = {
+        "status": "success",
+        "mode": "filter_only" if filter_only_mode else "aggregation",
+        "filters_used": filter_resolution,
+        "exact_match": all_exact,
+        "query_context": query_context,
+        "data_context": data_context,
+        "aggregations": aggregations if not filter_only_mode else {},
+        "warnings": warnings,
+        "chart_config": chart_config if not filter_only_mode else []
+    }
+
+    # Add samples for filter-only mode
+    if filter_only_mode:
+        response["samples"] = filter_only_samples
+        response["sample_count"] = len(filter_only_samples)
+        if not include_samples:
+            response["hint"] = "Add include_samples=true to see sample documents, or add group_by/stats_fields for aggregated analysis"
+
+    return ToolResult(content=[], structured_content=response)
+
+
+# ============================================================================
+# HELPER FUNCTIONS
+# ============================================================================
+
+def _generate_chart_config(
+    aggregations: Dict[str, Any],
+    group_by_fields: Optional[List[str]],
+    date_histogram: Optional[dict],
+    numeric_histogram: Optional[dict] = None
+) -> List[dict]:
+    """Generate chart configuration from aggregation results."""
+    charts = []
+
+    # Group by chart (top level only for multi-level)
+    if group_by_fields and "group_by" in aggregations:
+        group_data = aggregations["group_by"]
+        buckets = group_data.get("buckets", [])
+        if buckets:
+            field_name = group_by_fields[0]
+            title_suffix = ""
+            if len(group_by_fields) > 1:
+                title_suffix = f" (with {', '.join(group_by_fields[1:])} breakdown)"
+
+            charts.append({
+                "type": "bar",
+                "title": f"Events by {field_name.replace('_', ' ').title()}{title_suffix}",
+                "labels": [str(b["key"]) for b in buckets],
+                "data": [b["count"] for b in buckets],
+                "aggregation_field": field_name,
+                "multi_level": len(group_by_fields) > 1,
+                "total_records": sum(b["count"] for b in buckets)
+            })
+
+    # Date histogram chart
+    if date_histogram and "date_histogram" in aggregations:
+        hist_data = aggregations["date_histogram"]
+        buckets = hist_data.get("buckets", [])
+        if buckets:
+            interval = hist_data.get("interval", "month")
+            charts.append({
+                "type": "line",
+                "title": f"Events Over Time (by {interval})",
+                "labels": [str(b["date"]) for b in buckets],
+                "data": [b["count"] for b in buckets],
+                "aggregation_field": "date_histogram",
+                "interval": interval,
+                "total_records": sum(b["count"] for b in buckets)
+            })
+
+    # Numeric histogram chart
+    if numeric_histogram and "numeric_histogram" in aggregations:
+        hist_data = aggregations["numeric_histogram"]
+        buckets = hist_data.get("buckets", [])
+        if buckets:
+            field = hist_data.get("field", "value")
+            charts.append({
+                "type": "bar",
+                "title": f"Distribution of {field.replace('_', ' ').title()}",
+                "labels": [str(b["range"]) for b in buckets],
+                "data": [b["count"] for b in buckets],
+                "aggregation_field": "numeric_histogram",
+                "field": field,
+                "total_records": sum(b["count"] for b in buckets)
+            })
+
+    return charts
+
+
+# ============================================================================
+# STARTUP
+# ============================================================================
+
+async def startup():
+    """Initialize server: load index metadata."""
+    global validator
+
+    logger.info("Initializing Analytical MCP Server...")
+    logger.info(f"  OpenSearch: {OPENSEARCH_URL}")
+    logger.info(f"  Index: {INDEX_NAME}")
+
+    # Load metadata
+    await metadata.load(
+        opensearch_request,
+        INDEX_NAME,
+        KEYWORD_FIELDS,
+        NUMERIC_FIELDS,
+        DATE_FIELDS
+    )
+
+    # Initialize validator
+    validator = InputValidator(metadata)
+
+    logger.info("Server initialized successfully")
+
+
+# ============================================================================
+# MAIN
+# ============================================================================
+
+if __name__ == "__main__":
+    import asyncio
+
+    host = os.getenv("HOST", "127.0.0.1")
+    port = int(os.getenv("PORT", "8003"))
+
+    # Initialize metadata
+    asyncio.run(startup())
+
+    # Run server
+    logger.info(f"Starting Analytical MCP Server on http://{host}:{port}")
+    mcp.run(transport="sse", host=host, port=port)

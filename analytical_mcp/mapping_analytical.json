@@ -1,7 +1,24 @@
 {
   "settings": {
     "number_of_shards": 1,
-    "number_of_replicas": 0
+    "number_of_replicas": 0,
+    "analysis": {
+      "char_filter": {
+        "remove_whitespace": {
+          "type": "pattern_replace",
+          "pattern": "\\s+",
+          "replacement": ""
+        }
+      },
+      "analyzer": {
+        "normalized_fuzzy": {
+          "type": "custom",
+          "tokenizer": "keyword",
+          "char_filter": ["remove_whitespace"],
+          "filter": ["lowercase"]
+        }
+      }
+    }
   },
   "mappings": {
     "properties": {
@@ -12,27 +29,27 @@
       "country": {
         "type": "keyword",
         "fields": {
-          "search": {
+          "fuzzy": {
             "type": "text",
-            "analyzer": "standard"
+            "analyzer": "normalized_fuzzy"
           }
         }
       },
       "event_title": {
         "type": "keyword",
         "fields": {
-          "search": {
+          "fuzzy": {
             "type": "text",
-            "analyzer": "standard"
+            "analyzer": "normalized_fuzzy"
           }
         }
       },
       "event_theme": {
         "type": "keyword",
         "fields": {
-          "search": {
+          "fuzzy": {
             "type": "text",
-            "analyzer": "standard"
+            "analyzer": "normalized_fuzzy"
           }
         }
       },

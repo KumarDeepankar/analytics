@@ -54,12 +54,6 @@ NUMERIC_FIELDS = os.getenv("NUMERIC_FIELDS", "year,event_count").split(",")
 
 DATE_FIELDS = os.getenv("DATE_FIELDS", "event_date").split(",")
 
-# Non-indexed display fields (retrieved but not filterable)
-DISPLAY_FIELDS = os.getenv(
-    "DISPLAY_FIELDS",
-    "event_summary,event_highlight,event_conclusion,commentary_summary,next_event_plan,next_event_suggestion"
-).split(",")
-
 # All filterable fields
 ALL_FILTER_FIELDS = KEYWORD_FIELDS + NUMERIC_FIELDS + DATE_FIELDS
 
@@ -74,7 +68,6 @@ VALID_DATE_INTERVALS = ["year", "quarter", "month", "week", "day"]
 
 # Document return configuration
 MAX_DOCUMENTS = 10
-DOCUMENT_FIELDS_OVERRIDE = None  # Set to list like ["rid", "event_title"] to override RESULT_FIELDS
 
 
 # ============================================================================
@@ -214,7 +207,7 @@ async def resolve_keyword_filter(
 
     Strategy:
     1. Try exact match on keyword field
-    2. If no match and field supports fuzzy, try fuzzy match on .search field
+    2. If no match and field supports fuzzy, try fuzzy match on .fuzzy field
     3. Return match metadata for transparency
 
     Returns:
@@ -282,9 +275,9 @@ async def resolve_keyword_filter(
     except Exception as e:
         logger.warning(f"Case-insensitive query failed: {e}")
 
-    # Step 3: Try fuzzy match on .search field if supported
+    # Step 3: Try fuzzy match on .fuzzy field if supported (normalized: lowercase + no whitespace)
     if use_fuzzy and field in FUZZY_SEARCH_FIELDS:
-        search_field = f"{field}.search"
+        search_field = f"{field}.fuzzy"
         fuzzy_query = {
             "size": 0,
             "query": {
@@ -742,10 +735,10 @@ async def analyze_events(
                 "filter_and_group": {"filters": "{\"country\": \"India\"}", "group_by": "event_theme"}
             },
             "available_fields": {
-                "filters": ["country", "event_theme", "year", "event_date", "event_count"],
-                "group_by": ["country", "event_theme", "event_title", "year"],
-                "stats_fields": ["event_count", "year"],
-                "date_histogram": ["event_date"]
+                "filters": ALL_FILTER_FIELDS,
+                "group_by": KEYWORD_FIELDS + NUMERIC_FIELDS,
+                "stats_fields": NUMERIC_FIELDS,
+                "date_histogram": DATE_FIELDS
             }
         })
 
@@ -759,7 +752,7 @@ async def analyze_events(
     }
 
     # Document fields to return
-    doc_fields = DOCUMENT_FIELDS_OVERRIDE if DOCUMENT_FIELDS_OVERRIDE else RESULT_FIELDS
+    doc_fields = RESULT_FIELDS
 
     search_body: Dict[str, Any] = {
         "query": query_body,
@@ -885,8 +878,11 @@ async def analyze_events(
             2
         ),
         "date_range": {
-            "min": metadata.date_ranges.get("event_date").min if metadata.date_ranges.get("event_date") else None,
-            "max": metadata.date_ranges.get("event_date").max if metadata.date_ranges.get("event_date") else None
+            field: {
+                "min": metadata.date_ranges.get(field).min if metadata.date_ranges.get(field) else None,
+                "max": metadata.date_ranges.get(field).max if metadata.date_ranges.get(field) else None
+            }
+            for field in DATE_FIELDS
         }
     }
 

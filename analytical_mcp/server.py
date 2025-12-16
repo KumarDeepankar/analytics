@@ -36,7 +36,7 @@ logger = logging.getLogger(__name__)
 OPENSEARCH_URL = os.getenv("OPENSEARCH_URL", "https://98.93.206.97:9200")
 OPENSEARCH_USERNAME = os.getenv("OPENSEARCH_USERNAME", "admin")
 OPENSEARCH_PASSWORD = os.getenv("OPENSEARCH_PASSWORD", "admin")
-INDEX_NAME = os.getenv("INDEX_NAME", "events_analytics_v2")
+INDEX_NAME = os.getenv("INDEX_NAME", "events_analytics_v4")
 
 # Field configuration
 KEYWORD_FIELDS = os.getenv(
@@ -44,10 +44,16 @@ KEYWORD_FIELDS = os.getenv(
     "country,event_title,event_theme,rid,docid,url"
 ).split(",")
 
-# Fields that support fuzzy search via .search sub-field (multi-field mapping)
+# Fields that support fuzzy search via .fuzzy sub-field (multi-field mapping)
 FUZZY_SEARCH_FIELDS = os.getenv(
     "FUZZY_SEARCH_FIELDS",
     "country,event_title,event_theme"
+).split(",")
+
+# Fields that support word search via .words sub-field (standard analyzer)
+WORD_SEARCH_FIELDS = os.getenv(
+    "WORD_SEARCH_FIELDS",
+    "event_title"
 ).split(",")
 
 NUMERIC_FIELDS = os.getenv("NUMERIC_FIELDS", "year,event_count").split(",")
@@ -275,18 +281,39 @@ async def resolve_keyword_filter(
     except Exception as e:
         logger.warning(f"Case-insensitive query failed: {e}")
 
-    # Step 3: Try fuzzy match on .fuzzy field if supported (normalized: lowercase + no whitespace)
+    # Step 3: Try fuzzy match on .fuzzy field and word match on .words field
     if use_fuzzy and field in FUZZY_SEARCH_FIELDS:
         search_field = f"{field}.fuzzy"
-        fuzzy_query = {
-            "size": 0,
-            "query": {
+
+        # Build query - use bool.should to combine fuzzy and word match
+        should_clauses = [
+            {
                 "match": {
                     search_field: {
                         "query": value,
                         "fuzziness": "AUTO",
                         "prefix_length": 1
                     }
+                }
+            }
+        ]
+
+        # Add word match for fields that support it (no fuzziness - exact word match)
+        if field in WORD_SEARCH_FIELDS:
+            should_clauses.append({
+                "match": {
+                    f"{field}.words": {
+                        "query": value
+                    }
+                }
+            })
+
+        fuzzy_query = {
+            "size": 0,
+            "query": {
+                "bool": {
+                    "should": should_clauses,
+                    "minimum_should_match": 1
                 }
             },
             "aggs": {
@@ -308,9 +335,15 @@ async def resolve_keyword_filter(
                 best_match = matched_values[0]
                 confidence = fuzz.ratio(value.lower(), str(best_match).lower())
 
+                # Check if this looks like a word match (query is subset of match)
+                query_words = set(value.lower().split())
+                match_words = set(str(best_match).lower().split())
+                is_word_match = query_words.issubset(match_words) and len(query_words) < len(match_words)
+
                 # IMPORTANT: Before accepting a fuzzy match with low confidence,
                 # check if there's an EXACT match in another field
-                if confidence < 90:
+                # Skip this check for word matches (low confidence is expected)
+                if confidence < 90 and not is_word_match:
                     cross_field_matches = await search_value_across_fields(value, exclude_field=field)
                     exact_cross_matches = [m for m in cross_field_matches if m["match_type"] == "exact"]
 

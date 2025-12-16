@@ -41,6 +41,10 @@
           "fuzzy": {
             "type": "text",
             "analyzer": "normalized_fuzzy"
+          },
+          "words": {
+            "type": "text",
+            "analyzer": "standard"
           }
         }
       },

@@ -22,8 +22,8 @@ OPENSEARCH_URL = os.getenv("OPENSEARCH_URL", "https://98.93.206.97:9200")
 OPENSEARCH_USERNAME = os.getenv("OPENSEARCH_USERNAME", "admin")
 OPENSEARCH_PASSWORD = os.getenv("OPENSEARCH_PASSWORD", "admin")
 
-DEFAULT_SOURCE_INDEX = "events_analytics"
-DEFAULT_TARGET_INDEX = "events_analytics_v2"
+DEFAULT_SOURCE_INDEX = "events_analytics_v3"
+DEFAULT_TARGET_INDEX = "events_analytics_v4"
 
 # Mapping file path
 MAPPING_FILE = os.path.join(os.path.dirname(__file__), "mapping_analytical.json")

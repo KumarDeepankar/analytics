@@ -44,7 +44,8 @@ KEYWORD_FIELDS = os.getenv(
     "country,event_title,event_theme,rid,docid,url"
 ).split(",")
 
-# Fields that support fuzzy search via .fuzzy sub-field (multi-field mapping)
+# Fields that support fuzzy search via .fuzzy sub-field (multi-field mapping
+# )
 FUZZY_SEARCH_FIELDS = os.getenv(
     "FUZZY_SEARCH_FIELDS",
     "country,event_title,event_theme"
@@ -89,11 +90,11 @@ date: {', '.join(DATE_FIELDS)}
 </fields>
 
 <parameters>
-filters: JSON - exact match {{"country": "India", "year": 2023}}
-range_filters: JSON - range {{"year": {{"gte": 2020, "lte": 2024}}}}
+filters: JSON string - exact match '{{"country": "India", "year": 2023}}'
+range_filters: JSON string - range '{{"year": {{"gte": 2020, "lte": 2024}}}}'
 group_by: str - single "country" or nested "country,year"
-date_histogram: JSON - {{"field": "event_date", "interval": "year|quarter|month|week|day"}}
-numeric_histogram: JSON - {{"field": "event_count", "interval": 100}}
+date_histogram: JSON string - '{{"field": "event_date", "interval": "year|quarter|month|week|day"}}'
+numeric_histogram: JSON string - '{{"field": "event_count", "interval": 100}}'
 stats_fields: str - "event_count" returns min/max/avg/sum/count/std_dev
 top_n: int - max buckets (default 20)
 top_n_per_group: int - nested buckets (default 5)
@@ -600,28 +601,47 @@ async def analyze_events(
             resolve_result = await resolve_keyword_filter(field, str(value))
 
             if resolve_result["match_type"] == "wrong_field":
-                # Value found in a DIFFERENT field - return "did you mean" suggestion
+                # Value found in a DIFFERENT field - auto-correct and continue
                 did_you_mean = resolve_result.get("did_you_mean", [])
-                suggestions = []
-                for match in did_you_mean:
-                    suggestions.append({
-                        "correct_field": match["field"],
-                        "value": match["value"],
-                        "confidence": match["confidence"],
-                        "doc_count": match["doc_count"],
-                        "suggested_filter": {match["field"]: match["value"]}
-                    })
 
-                return ToolResult(content=[], structured_content={
-                    "status": "did_you_mean",
-                    "error": f"'{value}' not found in field '{field}'",
-                    "message": f"Did you mean to filter by '{did_you_mean[0]['field']}' instead?",
-                    "you_searched": {"field": field, "value": value},
-                    "did_you_mean": suggestions,
-                    "suggested_query": {
-                        "filters": {did_you_mean[0]["field"]: did_you_mean[0]["value"]}
+                if did_you_mean:
+                    # Auto-correct: use the correct field and value
+                    correct_field = did_you_mean[0]["field"]
+                    correct_value = did_you_mean[0]["value"]
+
+                    # Add warning about auto-correction
+                    warnings.append(
+                        f"Auto-corrected: '{value}' not found in '{field}', "
+                        f"using '{correct_field}': '{correct_value}' instead"
+                    )
+
+                    # Store correction metadata
+                    match_metadata[correct_field] = {
+                        "match_type": "auto_corrected",
+                        "original_field": field,
+                        "query_value": value,
+                        "matched_values": [correct_value],
+                        "confidence": did_you_mean[0].get("confidence", 100)
                     }
-                })
+
+                    # Build filter with corrected field/value
+                    filter_clauses.append({"term": {correct_field: correct_value}})
+
+                    query_context["filters_normalized"][correct_field] = {
+                        "original_field": field,
+                        "original_value": value,
+                        "corrected_to": correct_value,
+                        "match_type": "auto_corrected"
+                    }
+
+                    # Skip the rest of this iteration - filter already added
+                    continue
+                else:
+                    # No suggestions available - skip this filter with warning
+                    warnings.append(
+                        f"Skipped filter: '{value}' not found in '{field}' and no correction available"
+                    )
+                    continue
 
             if resolve_result["match_type"] == "none":
                 # No match found anywhere - return error with suggestions

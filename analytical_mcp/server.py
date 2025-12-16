@@ -16,6 +16,7 @@ from typing import Optional, Literal, List, Dict, Any
 import aiohttp
 from fastmcp import FastMCP
 from fastmcp.tools.tool import ToolResult
+from rapidfuzz import fuzz
 
 from index_metadata import IndexMetadata
 from input_validator import InputValidator
@@ -71,6 +72,10 @@ RESULT_FIELDS = os.getenv(
 # Valid date histogram intervals
 VALID_DATE_INTERVALS = ["year", "quarter", "month", "week", "day"]
 
+# Document return configuration
+MAX_DOCUMENTS = 10
+DOCUMENT_FIELDS_OVERRIDE = None  # Set to list like ["rid", "event_title"] to override RESULT_FIELDS
+
 
 # ============================================================================
 # DYNAMIC DOCSTRING
@@ -93,8 +98,7 @@ numeric_histogram: JSON - {{"field": "event_count", "interval": 100}}
 stats_fields: str - "event_count" returns min/max/avg/sum/count/std_dev
 top_n: int - max buckets (default 20)
 top_n_per_group: int - nested buckets (default 5)
-include_samples: bool - return sample docs (default false)
-sample_size: int - samples per bucket (default 3)
+samples_per_bucket: int - sample docs per aggregation bucket (default 0, disabled)
 </parameters>
 
 <date_formats>
@@ -117,14 +121,28 @@ Filter by date: filters='{{"event_date": "Q1 2023"}}', group_by="event_theme"
 Filter + trend: filters='{{"country": "India"}}', date_histogram='{{"field": "event_date", "interval": "month"}}'
 Range + group: range_filters='{{"year": {{"gte": 2022}}}}', group_by="country"
 Date range: range_filters='{{"event_date": {{"gte": "2023-01-01", "lte": "2023-12-31"}}}}', group_by="country"
-Get samples: filters='{{"country": "India"}}', include_samples=true
+Samples per bucket: group_by="country", samples_per_bucket=3
 </examples>
+
+<response>
+status: "success" | "error" | "did_you_mean" | "no_match"
+mode: "filter_only" | "aggregation"
+filters_used: {{field: value}} - resolved filter values
+exact_match: bool - true if all filters matched exactly
+data_context: {{total_documents_in_index, documents_matched, match_percentage}}
+aggregations: {{group_by, date_histogram, numeric_histogram, stats}} - based on query type
+documents: [...] - matching documents (always included)
+document_count: int - number of documents returned
+chart_config: [...] - visualization config for aggregations
+warnings: [...] - fuzzy match warnings if any
+</response>
 
 <rules>
 - Provide at least one: filters OR aggregation (group_by/date_histogram/stats_fields/numeric_histogram)
 - Use keyword fields for filters and group_by
 - Use numeric fields for stats_fields and numeric_histogram
 - Use date fields for date_histogram
+- samples_per_bucket: returns sample docs inside each aggregation bucket (only with group_by)
 </rules>
 """
 
@@ -294,7 +312,6 @@ async def resolve_keyword_filter(
                 matched_values = [b["key"] for b in buckets]
 
                 # Calculate confidence based on string similarity
-                from rapidfuzz import fuzz
                 best_match = matched_values[0]
                 confidence = fuzz.ratio(value.lower(), str(best_match).lower())
 
@@ -404,7 +421,6 @@ async def search_value_across_fields(value: str, exclude_field: str = None) -> L
 
             # If no exact match, try fuzzy
             if not any(m["field"] == field for m in matches):
-                from rapidfuzz import fuzz
                 for bucket in buckets:
                     bucket_value = str(bucket["key"])
                     score = fuzz.ratio(value_lower, bucket_value.lower())
@@ -442,8 +458,7 @@ async def analyze_events(
     sort_order: Optional[Literal["asc", "desc"]] = "desc",
     top_n: int = 20,
     top_n_per_group: int = 5,
-    include_samples: bool = False,
-    sample_size: int = 3
+    samples_per_bucket: int = 0
 ) -> ToolResult:
     """
     Analyze events with filtering, grouping, and statistics.
@@ -743,16 +758,16 @@ async def analyze_events(
         "bool": {"filter": filter_clauses}
     }
 
+    # Document fields to return
+    doc_fields = DOCUMENT_FIELDS_OVERRIDE if DOCUMENT_FIELDS_OVERRIDE else RESULT_FIELDS
+
     search_body: Dict[str, Any] = {
         "query": query_body,
-        "size": sample_size if (filter_only_mode and include_samples) else 0,
+        "size": MAX_DOCUMENTS,
         "track_total_hits": True,
-        "aggs": {}
+        "aggs": {},
+        "_source": doc_fields
     }
-
-    # For filter-only mode, add _source fields if samples requested
-    if filter_only_mode and include_samples:
-        search_body["_source"] = RESULT_FIELDS + DISPLAY_FIELDS
 
     # Add group by aggregation (supports multi-level nesting)
     if group_by_fields:
@@ -774,12 +789,12 @@ async def analyze_events(
                     else:
                         agg["terms"]["order"] = {"_count": sort_order or "desc"}
 
-            # Add samples at the deepest level
-            if len(fields) == 1 and include_samples:
+            # Add samples at the deepest level if samples_per_bucket > 0
+            if len(fields) == 1 and samples_per_bucket > 0:
                 agg["aggs"]["samples"] = {
                     "top_hits": {
-                        "size": sample_size,
-                        "_source": RESULT_FIELDS + DISPLAY_FIELDS
+                        "size": samples_per_bucket,
+                        "_source": doc_fields
                     }
                 }
 
@@ -870,16 +885,14 @@ async def analyze_events(
             2
         ),
         "date_range": {
-            "min": metadata.date_ranges.get("event_date", {}).min if "event_date" in metadata.date_ranges else None,
-            "max": metadata.date_ranges.get("event_date", {}).max if "event_date" in metadata.date_ranges else None
+            "min": metadata.date_ranges.get("event_date").min if metadata.date_ranges.get("event_date") else None,
+            "max": metadata.date_ranges.get("event_date").max if metadata.date_ranges.get("event_date") else None
         }
     }
 
-    # Extract samples for filter-only mode
-    filter_only_samples = []
-    if filter_only_mode:
-        hits = data.get("hits", {}).get("hits", [])
-        filter_only_samples = [h["_source"] for h in hits]
+    # Extract documents from response
+    hits = data.get("hits", {}).get("hits", [])
+    documents = [h["_source"] for h in hits]
 
     # Aggregation results
     aggregations: Dict[str, Any] = {}
@@ -1021,11 +1034,11 @@ async def analyze_events(
                 "confidence": meta.get("confidence")
             }
 
-    # Check if all matches are exact
+    # Check if all matches are exact (None if no filters applied)
     all_exact = all(
         m.get("match_type") == "exact"
         for m in match_metadata.values()
-    )
+    ) if match_metadata else None
 
     # Build final response
     response = {
@@ -1040,12 +1053,9 @@ async def analyze_events(
         "chart_config": chart_config if not filter_only_mode else []
     }
 
-    # Add samples for filter-only mode
-    if filter_only_mode:
-        response["samples"] = filter_only_samples
-        response["sample_count"] = len(filter_only_samples)
-        if not include_samples:
-            response["hint"] = "Add include_samples=true to see sample documents, or add group_by/stats_fields for aggregated analysis"
+    # Add documents to response
+    response["documents"] = documents
+    response["document_count"] = len(documents)
 
     return ToolResult(content=[], structured_content=response)
 
@@ -1116,31 +1126,6 @@ def _generate_chart_config(
             })
 
     return charts
-
-
-# ============================================================================
-# GET EVENT THEME BY DOCID
-# ============================================================================
-
-@mcp.tool(description="Get event_theme by docid.")
-async def get_event_theme(docid: str) -> ToolResult:
-    """Retrieve event_theme for a document by docid."""
-    search_body = {
-        "query": {"term": {"docid": docid}},
-        "size": 1,
-        "_source": ["docid", "event_theme"]
-    }
-
-    try:
-        data = await opensearch_request("POST", f"{INDEX_NAME}/_search", search_body)
-    except Exception as e:
-        return ToolResult(content=[], structured_content={"error": str(e)})
-
-    hits = data.get("hits", {}).get("hits", [])
-    if not hits:
-        return ToolResult(content=[], structured_content={"error": f"No doc found: {docid}"})
-
-    return ToolResult(content=[], structured_content=hits[0].get("_source", {}))
 
 
 # ============================================================================

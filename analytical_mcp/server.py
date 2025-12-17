@@ -76,6 +76,32 @@ VALID_DATE_INTERVALS = ["year", "quarter", "month", "week", "day"]
 # Document return configuration
 MAX_DOCUMENTS = 10
 
+# Field context configuration for tool description
+FIELD_CONTEXT_MAX_SAMPLES = int(os.getenv("FIELD_CONTEXT_MAX_SAMPLES", "5"))  # Max sample values per keyword field
+
+# Field descriptions for agent context (can be overridden via FIELD_DESCRIPTIONS env var as JSON)
+DEFAULT_FIELD_DESCRIPTIONS = {
+    "country": "Geographic location where the event took place",
+    "event_title": "Name/title of the event",
+    "event_theme": "Topic or category of the event",
+    "event_date": "Date when the event occurred",
+    "year": "Year of the event",
+    "event_count": "Number of occurrences or attendees",
+    "rid": "Unique record identifier",
+    "docid": "Document identifier",
+    "url": "Source URL of the event"
+}
+
+# Load custom descriptions from env if provided, otherwise use defaults
+_custom_desc = os.getenv("FIELD_DESCRIPTIONS", "")
+if _custom_desc:
+    try:
+        FIELD_DESCRIPTIONS = {**DEFAULT_FIELD_DESCRIPTIONS, **json.loads(_custom_desc)}
+    except json.JSONDecodeError:
+        FIELD_DESCRIPTIONS = DEFAULT_FIELD_DESCRIPTIONS
+else:
+    FIELD_DESCRIPTIONS = DEFAULT_FIELD_DESCRIPTIONS
+
 
 # ============================================================================
 # DYNAMIC DOCSTRING
@@ -1178,11 +1204,89 @@ def _generate_chart_config(
 
 
 # ============================================================================
+# DYNAMIC FIELD CONTEXT
+# ============================================================================
+
+def build_dynamic_field_context() -> str:
+    """
+    Build field context from loaded metadata.
+    Returns a formatted string with field descriptions, valid values, and ranges.
+    """
+    lines = []
+
+    # Keyword fields with descriptions and sample values
+    lines.append("Keyword Fields:")
+    for field in KEYWORD_FIELDS:
+        desc = FIELD_DESCRIPTIONS.get(field, "")
+        count = len(metadata.get_keyword_values(field))
+        top_vals = metadata.get_keyword_top_values(field, FIELD_CONTEXT_MAX_SAMPLES)
+        samples = [str(v["value"]) for v in top_vals]
+        if desc:
+            lines.append(f"  {field}: {desc}")
+            lines.append(f"    - {count} unique values, e.g., {samples}")
+        else:
+            lines.append(f"  {field}: {count} unique values, e.g., {samples}")
+
+    # Numeric fields with descriptions and ranges
+    lines.append("\nNumeric Fields:")
+    for field in NUMERIC_FIELDS:
+        desc = FIELD_DESCRIPTIONS.get(field, "")
+        range_info = metadata.get_numeric_range(field)
+        if range_info and range_info.min is not None:
+            range_str = f"range [{int(range_info.min)}, {int(range_info.max)}]"
+        else:
+            range_str = "numeric field"
+        if desc:
+            lines.append(f"  {field}: {desc}")
+            lines.append(f"    - {range_str}")
+        else:
+            lines.append(f"  {field}: {range_str}")
+
+    # Date fields with descriptions and ranges
+    lines.append("\nDate Fields:")
+    for field in DATE_FIELDS:
+        desc = FIELD_DESCRIPTIONS.get(field, "")
+        range_info = metadata.get_date_range(field)
+        if range_info and range_info.min:
+            range_str = f"range [{range_info.min}, {range_info.max}]"
+        else:
+            range_str = "date field"
+        if desc:
+            lines.append(f"  {field}: {desc}")
+            lines.append(f"    - {range_str}")
+        else:
+            lines.append(f"  {field}: {range_str}")
+
+    # Total documents
+    lines.append(f"\nTotal documents in index: {metadata.total_documents}")
+
+    return '\n'.join(lines)
+
+
+def update_tool_description():
+    """Update the analyze_events tool description with dynamic field context."""
+    field_context = build_dynamic_field_context()
+
+    # Build enhanced docstring with field context
+    enhanced_docstring = ANALYTICS_DOCSTRING.replace(
+        '</fields>',
+        f'</fields>\n\n<field_context>\n{field_context}\n</field_context>'
+    )
+
+    # Update the tool's description in FastMCP
+    for tool in mcp._tool_manager._tools.values():
+        if tool.name == "analyze_events":
+            tool.description = enhanced_docstring
+            logger.info("Updated analyze_events tool description with field context")
+            break
+
+
+# ============================================================================
 # STARTUP
 # ============================================================================
 
 async def startup():
-    """Initialize server: load index metadata."""
+    """Initialize server: load index metadata and update tool descriptions."""
     global validator
 
     logger.info("Initializing Analytical MCP Server...")
@@ -1200,6 +1304,9 @@ async def startup():
 
     # Initialize validator
     validator = InputValidator(metadata)
+
+    # Update tool description with dynamic field context
+    update_tool_description()
 
     logger.info("Server initialized successfully")
 

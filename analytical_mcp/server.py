@@ -79,6 +79,9 @@ MAX_DOCUMENTS = 10
 # Field context configuration for tool description
 FIELD_CONTEXT_MAX_SAMPLES = int(os.getenv("FIELD_CONTEXT_MAX_SAMPLES", "5"))  # Max sample values per keyword field
 
+# Samples per bucket configuration - sample docs returned inside each aggregation bucket
+SAMPLES_PER_BUCKET_DEFAULT = int(os.getenv("SAMPLES_PER_BUCKET_DEFAULT", "0"))  # 0 = disabled
+
 # Field descriptions for agent context (can be overridden via FIELD_DESCRIPTIONS env var as JSON)
 DEFAULT_FIELD_DESCRIPTIONS = {
     "country": "Geographic location where the event took place",
@@ -124,7 +127,7 @@ numeric_histogram: JSON string - '{{"field": "event_count", "interval": 100}}'
 stats_fields: str - "event_count" returns min/max/avg/sum/count/std_dev
 top_n: int - max buckets (default 20)
 top_n_per_group: int - nested buckets (default 5)
-samples_per_bucket: int - sample docs per aggregation bucket (default 0, disabled)
+samples_per_bucket: int - sample docs per aggregation bucket (default from SAMPLES_PER_BUCKET_DEFAULT env var, 0=disabled)
 </parameters>
 
 <date_formats>
@@ -186,6 +189,7 @@ warnings: [...] - fuzzy match warnings if any
 - Use numeric fields for stats_fields and numeric_histogram
 - Use date fields for date_histogram
 - samples_per_bucket: returns sample docs inside each aggregation bucket (only with group_by)
+- When samples_per_bucket > 0 with group_by: top-level documents array is skipped (samples are in buckets instead)
 </rules>
 """
 
@@ -528,7 +532,7 @@ async def analyze_events(
     sort_order: Optional[Literal["asc", "desc"]] = "desc",
     top_n: int = 20,
     top_n_per_group: int = 5,
-    samples_per_bucket: int = 0
+    samples_per_bucket: int = SAMPLES_PER_BUCKET_DEFAULT
 ) -> ToolResult:
     """
     Analyze events with filtering, grouping, and statistics.
@@ -850,9 +854,12 @@ async def analyze_events(
     # Document fields to return
     doc_fields = RESULT_FIELDS
 
+    # Skip top-level docs when samples_per_bucket is enabled with group_by (avoid redundancy)
+    top_level_doc_size = 0 if (samples_per_bucket > 0 and group_by_fields) else MAX_DOCUMENTS
+
     search_body: Dict[str, Any] = {
         "query": query_body,
-        "size": MAX_DOCUMENTS,
+        "size": top_level_doc_size,
         "track_total_hits": True,
         "aggs": {},
         "_source": doc_fields

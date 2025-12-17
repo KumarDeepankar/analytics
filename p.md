@@ -12,8 +12,8 @@ After EVERY `analyze_events` call, check these fields before presenting results:
 
 ### Match Types in `filters_used`
 - `exact` → Proceed normally
-- `approximate` → Tell user: "Fuzzy matched '{you_searched}' to '{closest_match}' ({confidence}%)"
-- `auto_corrected` → Tell user: "'{original_value}' not in '{original_field}', found in '{field}' instead"
+- `approximate` → Tell user: "Fuzzy matched the search term to the closest match with confidence score"
+- `auto_corrected` → Tell user: "The value was not found in the specified field, found in a different field instead"
 
 ### Rules
 1. Never silently accept `exact_match: false` - always disclose corrections

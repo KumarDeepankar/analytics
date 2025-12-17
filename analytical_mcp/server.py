@@ -128,7 +128,10 @@ samples_per_bucket: int - sample docs per aggregation bucket (default 0, disable
 </parameters>
 
 <date_formats>
-"2023" → full year | "Q1 2023" → quarter | "2023-06" → month | "2023-06-15" → exact
+"2023" → full year (Jan 1 - Dec 31)
+"Q1 2023" or "2023-Q1" or "2023Q1" → quarter (Jan 1 - Mar 31)
+"2023-06" → month (Jun 1 - Jun 30)
+"2023-06-15" → exact date
 </date_formats>
 
 <examples>
@@ -143,11 +146,25 @@ Year distribution: numeric_histogram='{{"field": "year", "interval": 1}}'
 Event stats: stats_fields="event_count"
 Filter + group: filters='{{"country": "India"}}', group_by="event_theme"
 Filter by year: filters='{{"year": 2023}}', group_by="country"
-Filter by date: filters='{{"event_date": "Q1 2023"}}', group_by="event_theme"
-Filter + trend: filters='{{"country": "India"}}', date_histogram='{{"field": "event_date", "interval": "month"}}'
 Range + group: range_filters='{{"year": {{"gte": 2022}}}}', group_by="country"
-Date range: range_filters='{{"event_date": {{"gte": "2023-01-01", "lte": "2023-12-31"}}}}', group_by="country"
 Samples per bucket: group_by="country", samples_per_bucket=3
+
+# Date filter examples (all formats):
+Filter by full year: filters='{{"event_date": "2023"}}', group_by="country"
+Filter by quarter (Q1 2023): filters='{{"event_date": "Q1 2023"}}', group_by="event_theme"
+Filter by quarter (2023-Q1): filters='{{"event_date": "2023-Q1"}}', group_by="event_theme"
+Filter by quarter (2023Q1): filters='{{"event_date": "2023Q1"}}', group_by="event_theme"
+Filter by month: filters='{{"event_date": "2023-06"}}', group_by="country"
+Filter by exact date: filters='{{"event_date": "2023-06-15"}}', group_by="country"
+
+# Date range_filters examples:
+Date range (exact dates): range_filters='{{"event_date": {{"gte": "2023-01-01", "lte": "2023-12-31"}}}}', group_by="country"
+Date range (year boundaries): range_filters='{{"event_date": {{"gte": "2022", "lte": "2023"}}}}', group_by="country"
+Date range (quarter start): range_filters='{{"event_date": {{"gte": "Q2 2023"}}}}', group_by="event_theme"
+Date range (month boundaries): range_filters='{{"event_date": {{"gte": "2023-06", "lte": "2023-09"}}}}', group_by="country"
+Date range (open-ended from): range_filters='{{"event_date": {{"gte": "2023-01-01"}}}}', group_by="country"
+Date range (open-ended to): range_filters='{{"event_date": {{"lte": "2023-06-30"}}}}', group_by="country"
+Date range + trend: range_filters='{{"event_date": {{"gte": "2022", "lte": "2023"}}}}', date_histogram='{{"field": "event_date", "interval": "month"}}'
 </examples>
 
 <response>

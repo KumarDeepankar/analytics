@@ -189,7 +189,6 @@ warnings: [...] - fuzzy match warnings if any
 - Use numeric fields for stats_fields and numeric_histogram
 - Use date fields for date_histogram
 - samples_per_bucket: returns sample docs inside each aggregation bucket (only with group_by)
-- When samples_per_bucket > 0 with group_by: top-level documents array is skipped (samples are in buckets instead)
 </rules>
 """
 

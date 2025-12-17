@@ -188,7 +188,7 @@ warnings: [...] - fuzzy match warnings if any
 - Use keyword fields for filters and group_by
 - Use numeric fields for stats_fields and numeric_histogram
 - Use date fields for date_histogram
-- samples_per_bucket: returns sample docs inside each aggregation bucket (only with group_by)
+- samples_per_bucket: returns sample docs inside each bucket with samples_returned, other_docs_in_bucket counts (only with group_by)
 </rules>
 """
 
@@ -1016,7 +1016,10 @@ async def analyze_events(
 
                 # Add samples if present (at deepest level)
                 if "samples" in b:
-                    item["samples"] = [h["_source"] for h in b["samples"]["hits"]["hits"]]
+                    samples_list = [h["_source"] for h in b["samples"]["hits"]["hits"]]
+                    item["samples"] = samples_list
+                    item["samples_returned"] = len(samples_list)
+                    item["other_docs_in_bucket"] = b["doc_count"] - len(samples_list)
 
                 # Recurse into nested aggregation
                 if "nested" in b and len(fields) > 1:

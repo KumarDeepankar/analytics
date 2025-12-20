@@ -27,6 +27,7 @@ class IndexMetadata:
     - Numeric field min/max ranges
     - Date field min/max ranges
     - Total document count
+    - Total unique ID count (for deduplication)
     - Field coverage percentages
     """
 
@@ -36,6 +37,8 @@ class IndexMetadata:
         self.numeric_ranges: Dict[str, Range] = {}
         self.date_ranges: Dict[str, Range] = {}
         self.total_documents: int = 0
+        self.total_unique_ids: int = 0  # Count of unique IDs for deduplication
+        self.unique_id_field: str = ""  # Field used for deduplication
         self.field_coverage: Dict[str, float] = {}
         self.index_name: str = ""
         self.last_updated: str = ""
@@ -46,7 +49,8 @@ class IndexMetadata:
         index_name: str,
         keyword_fields: List[str],
         numeric_fields: List[str],
-        date_fields: List[str]
+        date_fields: List[str],
+        unique_id_field: str = "rid"
     ):
         """
         Load all metadata from the index.
@@ -57,9 +61,12 @@ class IndexMetadata:
             keyword_fields: List of keyword field names
             numeric_fields: List of numeric field names
             date_fields: List of date field names
+            unique_id_field: Field used for deduplication (default: "rid")
         """
         self.index_name = index_name
+        self.unique_id_field = unique_id_field
         logger.info(f"Loading metadata for index '{index_name}'...")
+        logger.info(f"  Unique ID field: {unique_id_field}")
 
         # 1. Total document count
         try:
@@ -71,6 +78,30 @@ class IndexMetadata:
         except Exception as e:
             logger.error(f"  Failed to get document count: {e}")
             self.total_documents = 0
+
+        # 1b. Count unique IDs using cardinality aggregation
+        try:
+            unique_id_result = await opensearch_request(
+                "POST", f"{index_name}/_search", {
+                    "size": 0,
+                    "aggs": {
+                        "unique_ids": {
+                            "cardinality": {
+                                "field": unique_id_field,
+                                "precision_threshold": 40000
+                            }
+                        }
+                    }
+                }
+            )
+            self.total_unique_ids = unique_id_result.get("aggregations", {}).get("unique_ids", {}).get("value", 0)
+            logger.info(f"  Total unique IDs ({unique_id_field}): {self.total_unique_ids}")
+            if self.total_documents > self.total_unique_ids:
+                dup_rate = round((1 - self.total_unique_ids / self.total_documents) * 100, 1)
+                logger.info(f"  Duplicate ID rate: {dup_rate}% ({self.total_documents - self.total_unique_ids} duplicate docs)")
+        except Exception as e:
+            logger.error(f"  Failed to get unique ID count: {e}")
+            self.total_unique_ids = self.total_documents  # Fallback to doc count
 
         # 2. Keyword field values and counts
         for field in keyword_fields:

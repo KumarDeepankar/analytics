@@ -39,13 +39,16 @@ OPENSEARCH_PASSWORD = os.getenv("OPENSEARCH_PASSWORD", "admin")
 INDEX_NAME = os.getenv("INDEX_NAME", "events_analytics_v4")
 
 # Field configuration
+
+# Unique identifier field for deduplication (treats multiple docs with same ID as one record)
+UNIQUE_ID_FIELD = os.getenv("UNIQUE_ID_FIELD", "rid")
+
 KEYWORD_FIELDS = os.getenv(
     "KEYWORD_FIELDS",
     "country,event_title,event_theme,rid,docid,url"
 ).split(",")
 
-# Fields that support fuzzy search via .fuzzy sub-field (multi-field mapping
-# )
+# Fields that support fuzzy search via .fuzzy sub-field (multi-field mapping)
 FUZZY_SEARCH_FIELDS = os.getenv(
     "FUZZY_SEARCH_FIELDS",
     "country,event_title,event_theme"
@@ -261,6 +264,7 @@ async def resolve_keyword_filter(
     Strategy:
     1. Try exact match on keyword field
     2. If no match and field supports fuzzy, try fuzzy match on .fuzzy field
+       (handles case-insensitive + whitespace normalization via normalized_fuzzy analyzer)
     3. Return match metadata for transparency
 
     Returns:
@@ -296,39 +300,8 @@ async def resolve_keyword_filter(
     except Exception as e:
         logger.warning(f"Exact match query failed: {e}")
 
-    # Step 2: Try case-insensitive match via lowercase comparison
-    # Use terms aggregation to find the actual value
-    case_query = {
-        "size": 0,
-        "aggs": {
-            "all_values": {
-                "terms": {"field": field, "size": 1000}
-            }
-        }
-    }
-
-    try:
-        result = await opensearch_request("POST", f"{INDEX_NAME}/_search", case_query)
-        buckets = result.get("aggregations", {}).get("all_values", {}).get("buckets", [])
-
-        # Check for case-insensitive match
-        value_lower = value.lower().strip()
-        for bucket in buckets:
-            if str(bucket["key"]).lower() == value_lower:
-                matched_value = bucket["key"]
-                return {
-                    "match_type": "exact",  # Case-insensitive is still considered exact
-                    "query_value": value,
-                    "matched_values": [matched_value],
-                    "filter_clause": {"term": {field: matched_value}},
-                    "confidence": 100,
-                    "hit_count": bucket["doc_count"],
-                    "note": f"Case-normalized: '{value}' -> '{matched_value}'"
-                }
-    except Exception as e:
-        logger.warning(f"Case-insensitive query failed: {e}")
-
-    # Step 3: Try fuzzy match on .fuzzy field and word match on .words field
+    # Step 2: Try fuzzy match on .fuzzy field and word match on .words field
+    # The normalized_fuzzy analyzer handles case-insensitive + whitespace normalization
     if use_fuzzy and field in FUZZY_SEARCH_FIELDS:
         search_field = f"{field}.fuzzy"
 
@@ -860,36 +833,56 @@ async def analyze_events(
         "query": query_body,
         "size": top_level_doc_size,
         "track_total_hits": True,
-        "aggs": {},
+        "aggs": {
+            # Always count unique IDs for accurate totals
+            "unique_ids": {"cardinality": {"field": UNIQUE_ID_FIELD, "precision_threshold": 40000}}
+        },
         "_source": doc_fields
     }
+
+    # Add field collapse to deduplicate documents by unique ID field
+    if top_level_doc_size > 0:
+        search_body["collapse"] = {"field": UNIQUE_ID_FIELD}
 
     # Add group by aggregation (supports multi-level nesting)
     if group_by_fields:
         def build_nested_agg(fields: List[str], depth: int = 0) -> Dict[str, Any]:
-            """Recursively build nested terms aggregations."""
+            """Recursively build nested terms aggregations with unique ID counts."""
             field = fields[0]
             size = top_n if depth == 0 else top_n_per_group
 
             agg: Dict[str, Any] = {
                 "terms": {"field": field, "size": size},
-                "aggs": {}
+                "aggs": {
+                    # Count unique IDs in each bucket for accurate counts
+                    "unique_ids": {"cardinality": {"field": UNIQUE_ID_FIELD, "precision_threshold": 40000}}
+                }
             }
 
-            # Add sorting at top level
+            # Add sorting at top level (sort by unique_ids count instead of doc_count)
             if depth == 0 and sort_by:
                 if sort_by in fields or sort_by == "count" or sort_by == "_count":
                     if sort_by in fields:
                         agg["terms"]["order"] = {"_key": sort_order or "desc"}
                     else:
-                        agg["terms"]["order"] = {"_count": sort_order or "desc"}
+                        # Sort by unique ID count instead of doc_count
+                        agg["terms"]["order"] = {"unique_ids": sort_order or "desc"}
 
             # Add samples at the deepest level if samples_per_bucket > 0
+            # Use terms on unique ID field with top_hits to deduplicate samples
             if len(fields) == 1 and samples_per_bucket > 0:
-                agg["aggs"]["samples"] = {
-                    "top_hits": {
-                        "size": samples_per_bucket,
-                        "_source": doc_fields
+                agg["aggs"]["unique_samples"] = {
+                    "terms": {
+                        "field": UNIQUE_ID_FIELD,
+                        "size": samples_per_bucket
+                    },
+                    "aggs": {
+                        "sample_doc": {
+                            "top_hits": {
+                                "size": 1,
+                                "_source": doc_fields
+                            }
+                        }
                     }
                 }
 
@@ -922,6 +915,10 @@ async def analyze_events(
                 "format": format_map.get(interval, "yyyy-MM-dd"),
                 "min_doc_count": 0,
                 "order": {"_key": "asc"}
+            },
+            "aggs": {
+                # Count unique IDs per time bucket
+                "unique_ids": {"cardinality": {"field": UNIQUE_ID_FIELD, "precision_threshold": 40000}}
             }
         }
 
@@ -935,6 +932,10 @@ async def analyze_events(
                 "range": {
                     "field": field,
                     "ranges": parsed_numeric_histogram["ranges"]
+                },
+                "aggs": {
+                    # Count unique IDs per range bucket
+                    "unique_ids": {"cardinality": {"field": UNIQUE_ID_FIELD, "precision_threshold": 40000}}
                 }
             }
         else:
@@ -945,6 +946,10 @@ async def analyze_events(
                     "field": field,
                     "interval": interval,
                     "min_doc_count": 0
+                },
+                "aggs": {
+                    # Count unique IDs per histogram bucket
+                    "unique_ids": {"cardinality": {"field": UNIQUE_ID_FIELD, "precision_threshold": 40000}}
                 }
             }
 
@@ -967,16 +972,22 @@ async def analyze_events(
 
     total_hits = data.get("hits", {}).get("total", {}).get("value", 0)
     aggs = data.get("aggregations", {})
-    total_matched = total_hits  # Using total_hits directly instead of cardinality
+
+    # Use unique ID count for accurate totals (treats duplicate ID docs as one)
+    total_unique_ids = aggs.get("unique_ids", {}).get("value", 0)
+    total_matched = total_unique_ids if total_unique_ids > 0 else total_hits
 
     # Data context
     data_context = {
         "index_name": INDEX_NAME,
+        "unique_id_field": UNIQUE_ID_FIELD,
+        "total_unique_ids_in_index": metadata.total_unique_ids,
         "total_documents_in_index": metadata.total_documents,
-        "documents_matched": total_matched,
+        "unique_ids_matched": total_matched,
+        "documents_matched": total_hits,  # Keep raw doc count for reference
         "match_percentage": round(
-            (total_matched / metadata.total_documents * 100)
-            if metadata.total_documents > 0 else 0,
+            (total_matched / metadata.total_unique_ids * 100)
+            if metadata.total_unique_ids > 0 else 0,
             2
         ),
         "date_range": {
@@ -999,27 +1010,37 @@ async def analyze_events(
     if group_by_fields and "group_by_agg" in aggs:
 
         def extract_nested_buckets(agg_data: dict, fields: List[str], depth: int = 0) -> List[dict]:
-            """Recursively extract nested aggregation buckets."""
+            """Recursively extract nested aggregation buckets with unique ID counts."""
             results = []
             buckets = agg_data.get("buckets", [])
 
             for b in buckets:
+                # Use unique_ids count instead of doc_count for accurate counting
+                unique_count = b.get("unique_ids", {}).get("value", b["doc_count"])
+
                 item = {
                     "key": b["key"],
-                    "count": b["doc_count"],
+                    "count": unique_count,  # Unique ID count
+                    "doc_count": b["doc_count"],  # Raw doc count for reference
                     "percentage": round(
-                        b["doc_count"] / total_matched * 100
+                        unique_count / total_matched * 100
                         if total_matched > 0 else 0,
                         1
                     )
                 }
 
-                # Add samples if present (at deepest level)
-                if "samples" in b:
-                    samples_list = [h["_source"] for h in b["samples"]["hits"]["hits"]]
+                # Add samples if present (at deepest level) - using new deduplicated structure
+                if "unique_samples" in b:
+                    # Extract one doc per unique ID
+                    samples_list = []
+                    for id_bucket in b["unique_samples"].get("buckets", []):
+                        sample_hits = id_bucket.get("sample_doc", {}).get("hits", {}).get("hits", [])
+                        if sample_hits:
+                            samples_list.append(sample_hits[0]["_source"])
+
                     item["samples"] = samples_list
                     item["samples_returned"] = len(samples_list)
-                    item["other_docs_in_bucket"] = b["doc_count"] - len(samples_list)
+                    item["other_ids_in_bucket"] = unique_count - len(samples_list)
 
                 # Recurse into nested aggregation
                 if "nested" in b and len(fields) > 1:
@@ -1034,7 +1055,7 @@ async def analyze_events(
 
         group_results = extract_nested_buckets(aggs["group_by_agg"], group_by_fields)
 
-        # Calculate other count
+        # Calculate other count based on unique RIDs
         top_n_count = sum(r["count"] for r in group_results)
         other_count = total_matched - top_n_count
 
@@ -1055,9 +1076,10 @@ async def analyze_events(
             "buckets": [
                 {
                     "date": b.get("key_as_string", b.get("key")),
-                    "count": b["doc_count"],
+                    "count": b.get("unique_ids", {}).get("value", b["doc_count"]),  # Unique ID count
+                    "doc_count": b["doc_count"],  # Raw doc count for reference
                     "percentage": round(
-                        b["doc_count"] / total_matched * 100
+                        b.get("unique_ids", {}).get("value", b["doc_count"]) / total_matched * 100
                         if total_matched > 0 else 0,
                         1
                     )
@@ -1081,13 +1103,17 @@ async def analyze_events(
                 # Histogram format - bucket key is the lower bound
                 label = f"{b['key']}-{b['key'] + parsed_numeric_histogram.get('interval', 10)}"
 
+            # Use unique_ids count instead of doc_count
+            unique_count = b.get("unique_ids", {}).get("value", b["doc_count"])
+
             hist_buckets.append({
                 "range": label,
                 "from": b.get("from") if is_range else b.get("key"),
                 "to": b.get("to") if is_range else (b.get("key", 0) + parsed_numeric_histogram.get("interval", 10)),
-                "count": b["doc_count"],
+                "count": unique_count,  # Unique ID count
+                "doc_count": b["doc_count"],  # Raw doc count for reference
                 "percentage": round(
-                    b["doc_count"] / total_matched * 100
+                    unique_count / total_matched * 100
                     if total_matched > 0 else 0,
                     1
                 )
@@ -1283,8 +1309,13 @@ def build_dynamic_field_context() -> str:
         else:
             lines.append(f"  {field}: {range_str}")
 
-    # Total documents
-    lines.append(f"\nTotal documents in index: {metadata.total_documents}")
+    # Total documents and unique IDs
+    lines.append(f"\nUnique ID field: {UNIQUE_ID_FIELD}")
+    lines.append(f"Total unique IDs in index: {metadata.total_unique_ids}")
+    lines.append(f"Total documents in index: {metadata.total_documents}")
+    if metadata.total_documents > metadata.total_unique_ids:
+        dup_rate = round((1 - metadata.total_unique_ids / metadata.total_documents) * 100, 1)
+        lines.append(f"Note: {dup_rate}% duplicate ID rate - counts use unique IDs for accuracy")
 
     return '\n'.join(lines)
 
@@ -1325,7 +1356,8 @@ async def startup():
         INDEX_NAME,
         KEYWORD_FIELDS,
         NUMERIC_FIELDS,
-        DATE_FIELDS
+        DATE_FIELDS,
+        UNIQUE_ID_FIELD
     )
 
     # Initialize validator

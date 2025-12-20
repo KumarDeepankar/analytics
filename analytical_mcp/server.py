@@ -3,8 +3,8 @@
 Analytical MCP Server - Pure Analytics with Fuzzy Matching
 
 A FastMCP server that provides:
-- Keyword, integer, and date field filtering only (no text search)
-- Universal fuzzy matching on all field types
+- Keyword, integer, and date field filtering with fuzzy matching
+- Full-text search fallback when keyword filters don't match
 - Strong guardrails for consistent results
 - Rich contextual responses with full metadata
 """
@@ -20,6 +20,7 @@ from rapidfuzz import fuzz
 
 from index_metadata import IndexMetadata
 from input_validator import InputValidator
+from text_search import text_search_with_filters
 
 # Configure logging
 logging.basicConfig(
@@ -603,6 +604,7 @@ async def analyze_events(
     # ===== VALIDATE AND NORMALIZE FILTERS =====
 
     filter_clauses = []
+    search_terms = []  # Values that failed keyword matching (will become text search)
 
     for field, value in parsed_filters.items():
         # Validate field name
@@ -663,15 +665,18 @@ async def analyze_events(
                     continue
 
             if resolve_result["match_type"] == "none":
-                # No match found anywhere - return error with suggestions
-                top_values = metadata.get_keyword_top_values(field, 5)
-                return ToolResult(content=[], structured_content={
-                    "status": "no_match",
-                    "error": f"No match found for {field}: '{value}'",
-                    "you_searched": {"field": field, "value": value},
-                    "suggestions": [v["value"] for v in top_values],
-                    "top_values": top_values
-                })
+                # No match found - add to search_terms for text search fallback
+                search_terms.append(str(value))
+                warnings.append(f"No exact match for '{value}' in '{field}' - will use text search")
+
+                # Store metadata about the failed filter
+                match_metadata[field] = {
+                    "match_type": "search_fallback",
+                    "query_value": value,
+                    "matched_values": [],
+                    "confidence": 0
+                }
+                continue
 
             # Store match metadata for transparency
             match_metadata[field] = {
@@ -790,7 +795,7 @@ async def analyze_events(
 
     # ===== REQUIRE AT LEAST ONE: FILTER OR AGGREGATION =====
 
-    has_filters = bool(filter_clauses)
+    has_filters = bool(filter_clauses) or bool(search_terms)  # Include search_terms as they came from filters
     has_aggregation = bool(group_by_fields or parsed_date_histogram or parsed_numeric_histogram or parsed_stats_fields)
 
     if not has_filters and not has_aggregation:
@@ -816,6 +821,57 @@ async def analyze_events(
 
     # Flag for filter-only mode (no aggregation)
     filter_only_mode = has_filters and not has_aggregation
+
+    # ===== TEXT SEARCH FALLBACK =====
+    # If any keyword filter failed (no match), use text search with remaining filters
+
+    if search_terms:
+        logger.info(f"Text search fallback: terms={search_terms}, filters={len(filter_clauses)}")
+
+        search_result = await text_search_with_filters(
+            search_terms=search_terms,
+            filter_clauses=filter_clauses,
+            opensearch_request=opensearch_request,
+            index_name=INDEX_NAME,
+            unique_id_field=UNIQUE_ID_FIELD,
+            max_results=MAX_DOCUMENTS,
+            source_fields=RESULT_FIELDS
+        )
+
+        if search_result["status"] == "success":
+            return ToolResult(content=[], structured_content={
+                "status": "success",
+                "mode": "search",
+                "data_context": {
+                    "unique_id_field": UNIQUE_ID_FIELD,
+                    "total_unique_ids_in_index": metadata.total_unique_ids,
+                    "total_documents_in_index": metadata.total_documents,
+                    "search_query": search_result["search_query"],
+                    "search_terms": search_terms,
+                    "unique_ids_matched": search_result["unique_hits"],
+                    "documents_matched": search_result["total_hits"],
+                    "max_score": search_result["max_score"],
+                    "fields_searched": search_result["fields_searched"],
+                    "filters_applied": {f: v for f, v in parsed_filters.items() if f in [c.get("term", {}).keys() for c in filter_clauses]} if filter_clauses else {}
+                },
+                "documents": search_result["documents"],
+                "warnings": warnings,
+                "match_metadata": match_metadata
+            })
+        else:
+            # Text search also returned no results
+            return ToolResult(content=[], structured_content={
+                "status": "no_results",
+                "mode": "search",
+                "data_context": {
+                    "search_query": " ".join(search_terms),
+                    "search_terms": search_terms,
+                    "fields_searched": search_result["fields_searched"]
+                },
+                "error": f"No results found for search: '{' '.join(search_terms)}'",
+                "warnings": warnings,
+                "match_metadata": match_metadata
+            })
 
     # ===== BUILD OPENSEARCH QUERY =====
 

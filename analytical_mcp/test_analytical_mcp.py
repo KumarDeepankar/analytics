@@ -11,7 +11,7 @@ from typing import Any, Dict, List, Optional
 # Add parent directory to path for imports
 sys.path.insert(0, '/Users/deepankar/Documents/analytics/analytical_mcp')
 
-from server import mcp, startup, metadata, KEYWORD_FIELDS, NUMERIC_FIELDS, DATE_FIELDS
+from server import mcp, startup, metadata, KEYWORD_FIELDS, NUMERIC_FIELDS, DATE_FIELDS, UNIQUE_ID_FIELD
 
 # Get the actual function from the decorated tool
 # The @mcp.tool() decorator wraps the function - we need to get the underlying fn
@@ -155,6 +155,55 @@ def check_response(result: TestResult, checks: Dict[str, Any]):
             result.add_check("no_error", not has_error,
                            f"error: {response.get('error', 'none')[:50]}")
 
+        elif check_name == "unique_ids_less_than_docs":
+            data_ctx = response.get("data_context", {})
+            unique_ids = data_ctx.get("unique_ids_matched", 0)
+            docs = data_ctx.get("documents_matched", 0)
+            passed = unique_ids < docs if expected else unique_ids >= docs
+            result.add_check("unique_ids_less_than_docs", passed,
+                           f"unique_ids: {unique_ids}, docs: {docs}")
+
+        elif check_name == "has_unique_id_field":
+            data_ctx = response.get("data_context", {})
+            has_field = "unique_id_field" in data_ctx
+            result.add_check("has_unique_id_field", has_field == expected,
+                           f"unique_id_field: {data_ctx.get('unique_id_field', 'missing')}")
+
+        elif check_name == "bucket_has_doc_count":
+            aggs = response.get("aggregations", {})
+            group_by = aggs.get("group_by", {})
+            buckets = group_by.get("buckets", [])
+            has_doc_count = all("doc_count" in b for b in buckets) if buckets else False
+            result.add_check("bucket_has_doc_count", has_doc_count == expected,
+                           f"buckets with doc_count: {has_doc_count}")
+
+        elif check_name == "documents_have_unique_rids":
+            docs = response.get("documents", [])
+            if docs:
+                rids = [d.get("rid") for d in docs]
+                unique_rids = set(rids)
+                all_unique = len(rids) == len(unique_rids)
+                result.add_check("documents_have_unique_rids", all_unique == expected,
+                               f"docs: {len(docs)}, unique rids: {len(unique_rids)}")
+            else:
+                result.add_check("documents_have_unique_rids", not expected,
+                               "no documents returned")
+
+        elif check_name == "samples_have_unique_rids":
+            aggs = response.get("aggregations", {})
+            group_by = aggs.get("group_by", {})
+            buckets = group_by.get("buckets", [])
+            all_samples_unique = True
+            for b in buckets:
+                samples = b.get("samples", [])
+                if samples:
+                    rids = [s.get("rid") for s in samples]
+                    if len(rids) != len(set(rids)):
+                        all_samples_unique = False
+                        break
+            result.add_check("samples_have_unique_rids", all_samples_unique == expected,
+                           f"all samples have unique rids: {all_samples_unique}")
+
 
 async def main():
     print("=" * 90)
@@ -166,6 +215,8 @@ async def main():
     try:
         await startup()
         print(f"    Server initialized. Total docs: {metadata.total_documents}")
+        print(f"    Total unique IDs: {metadata.total_unique_ids}")
+        print(f"    Unique ID field: {UNIQUE_ID_FIELD}")
         print(f"    Keyword fields: {KEYWORD_FIELDS}")
         print(f"    Numeric fields: {NUMERIC_FIELDS}")
         print(f"    Date fields: {DATE_FIELDS}")
@@ -262,12 +313,35 @@ async def main():
     print("[3] NO MATCH CASE")
     print("=" * 90)
 
-    # Test 3.1: Value that doesn't exist anywhere
-    r = await run_test("3.1 No match: completely invalid value",
+    # Test 3.1: Value that doesn't exist anywhere - now uses text search fallback
+    r = await run_test("3.1 No match: text search fallback returns no results",
                        filters='{"country": "XYZNonExistentCountry123"}')
     check_response(r, {
-        "status": "no_match",
-        "error_contains": "no match"
+        "status": "no_results",
+        "mode": "search",
+        "error_contains": "no results"
+    })
+    results.append(r)
+    print(r)
+
+    # Test 3.2: Text search fallback with partial match - should find results
+    r = await run_test("3.2 Text search fallback finds matching documents",
+                       filters='{"country": "Summit"}')  # "Summit" is in event_title.words
+    check_response(r, {
+        "status": "success",
+        "mode": "search",
+        "has_documents": True
+    })
+    results.append(r)
+    print(r)
+
+    # Test 3.3: Text search with successful filter + failed filter
+    r = await run_test("3.3 Hybrid: country filter + text search",
+                       filters='{"country": "India", "event_theme": "Summit"}')  # India matches, Summit doesn't
+    check_response(r, {
+        "status": "success",
+        "mode": "search",
+        "has_documents": True
     })
     results.append(r)
     print(r)
@@ -591,6 +665,225 @@ async def main():
         "status": "success",
         "no_error": True
     })
+    results.append(r)
+    print(r)
+
+    # =========================================================================
+    # TEST GROUP 12: UNIQUE ID DEDUPLICATION
+    # =========================================================================
+    print("\n" + "=" * 90)
+    print("[12] UNIQUE ID DEDUPLICATION")
+    print("=" * 90)
+
+    # Test 12.1: Response contains unique_id_field in data_context
+    r = await run_test("12.1 Response has unique_id_field in data_context",
+                       group_by="country",
+                       top_n=10)
+    check_response(r, {
+        "status": "success",
+        "has_unique_id_field": True,
+        "no_error": True
+    })
+    results.append(r)
+    print(r)
+
+    # Test 12.2: Buckets contain both count (unique IDs) and doc_count
+    r = await run_test("12.2 Buckets have both count and doc_count",
+                       group_by="country",
+                       top_n=10)
+    check_response(r, {
+        "status": "success",
+        "has_group_by": True,
+        "bucket_has_doc_count": True,
+        "no_error": True
+    })
+    results.append(r)
+    print(r)
+
+    # Test 12.3: Filter by DUP001 - should show unique_ids < docs
+    r = await run_test("12.3 Filter duplicate RID - unique_ids equals 1",
+                       filters='{"rid": "DUP001"}')
+    if r.response and r.response.get("status") == "success":
+        data_ctx = r.response.get("data_context", {})
+        unique_ids = data_ctx.get("unique_ids_matched", 0)
+        docs = data_ctx.get("documents_matched", 0)
+        # DUP001 has 3 docs but 1 unique RID
+        r.add_check("unique_ids=1", unique_ids == 1, f"unique_ids: {unique_ids}")
+        r.add_check("docs=3", docs == 3, f"docs: {docs}")
+    results.append(r)
+    print(r)
+
+    # Test 12.4: Group by country - verify India count reflects unique RIDs
+    r = await run_test("12.4 Group by country - India unique RID count",
+                       group_by="country",
+                       top_n=20)
+    if r.response and r.response.get("status") == "success":
+        aggs = r.response.get("aggregations", {})
+        buckets = aggs.get("group_by", {}).get("buckets", [])
+        india_bucket = next((b for b in buckets if b["key"] == "India"), None)
+        if india_bucket:
+            # India has 7 docs but 5 unique RIDs (TEST001, DUP001, FUZZY001, AGG001, AGG002)
+            count = india_bucket.get("count", 0)
+            doc_count = india_bucket.get("doc_count", 0)
+            r.add_check("India count<=doc_count", count <= doc_count,
+                       f"count: {count}, doc_count: {doc_count}")
+            r.add_check("India has duplicates", doc_count > count,
+                       f"doc_count ({doc_count}) > count ({count})")
+        else:
+            r.add_check("India bucket found", False, "India bucket not found")
+    results.append(r)
+    print(r)
+
+    # =========================================================================
+    # TEST GROUP 13: FIELD COLLAPSE (DOCUMENT DEDUPLICATION)
+    # =========================================================================
+    print("\n" + "=" * 90)
+    print("[13] FIELD COLLAPSE (DOCUMENT DEDUPLICATION)")
+    print("=" * 90)
+
+    # Test 13.1: Documents returned should have unique RIDs
+    r = await run_test("13.1 Returned documents have unique RIDs",
+                       filters='{"country": "India"}')
+    check_response(r, {
+        "status": "success",
+        "has_documents": True,
+        "documents_have_unique_rids": True,
+        "no_error": True
+    })
+    results.append(r)
+    print(r)
+
+    # Test 13.2: Group by with samples - samples should have unique RIDs
+    r = await run_test("13.2 Samples per bucket have unique RIDs",
+                       group_by="country",
+                       top_n=5,
+                       samples_per_bucket=3)
+    check_response(r, {
+        "status": "success",
+        "has_group_by": True,
+        "samples_have_unique_rids": True,
+        "no_error": True
+    })
+    results.append(r)
+    print(r)
+
+    # Test 13.3: Max 10 documents returned (even with duplicates in index)
+    r = await run_test("13.3 Document count respects MAX_DOCUMENTS limit",
+                       group_by="country")
+    if r.response and r.response.get("status") == "success":
+        docs = r.response.get("documents", [])
+        doc_count = r.response.get("document_count", 0)
+        r.add_check("document_count<=10", doc_count <= 10, f"document_count: {doc_count}")
+        r.add_check("docs_length<=10", len(docs) <= 10, f"docs length: {len(docs)}")
+    results.append(r)
+    print(r)
+
+    # =========================================================================
+    # TEST GROUP 14: FUZZY MATCHING (NORMALIZED_FUZZY ANALYZER)
+    # =========================================================================
+    print("\n" + "=" * 90)
+    print("[14] FUZZY MATCHING (NORMALIZED_FUZZY ANALYZER)")
+    print("=" * 90)
+
+    # Test 14.1: Case-insensitive matching
+    r = await run_test("14.1 Case-insensitive match: 'india' -> 'India'",
+                       filters='{"country": "india"}',
+                       group_by="event_theme")
+    check_response(r, {
+        "status": "success",
+        "has_documents": True,
+        "no_error": True
+    })
+    results.append(r)
+    print(r)
+
+    # Test 14.2: Fuzzy matching with typo
+    r = await run_test("14.2 Fuzzy match: 'Indai' -> 'India' (typo)",
+                       filters='{"country": "Indai"}',
+                       group_by="event_theme")
+    check_response(r, {
+        "status": "success",
+        "has_warnings": True,  # Should have fuzzy match warning
+        "no_error": True
+    })
+    results.append(r)
+    print(r)
+
+    # Test 14.3: Whitespace normalization - "World Heritage" with extra spaces
+    r = await run_test("14.3 Fuzzy match: 'World  Heritage' (extra space)",
+                       filters='{"event_title": "World  Heritage"}',
+                       group_by="country")
+    check_response(r, {
+        "status": "success",
+        "no_error": True
+    })
+    results.append(r)
+    print(r)
+
+    # Test 14.4: Word partial match - "Heritage" should match "World Heritage Conference"
+    r = await run_test("14.4 Word match: 'Heritage' in event_title",
+                       filters='{"event_title": "Heritage"}',
+                       group_by="country")
+    check_response(r, {
+        "status": "success",
+        "no_error": True
+    })
+    results.append(r)
+    print(r)
+
+    # =========================================================================
+    # TEST GROUP 15: DATA INTEGRITY VERIFICATION
+    # =========================================================================
+    print("\n" + "=" * 90)
+    print("[15] DATA INTEGRITY VERIFICATION")
+    print("=" * 90)
+
+    # Test 15.1: Total unique IDs in metadata
+    r = await run_test("15.1 Metadata has unique ID count",
+                       group_by="country")
+    if r.response and r.response.get("status") == "success":
+        data_ctx = r.response.get("data_context", {})
+        total_unique = data_ctx.get("total_unique_ids_in_index", 0)
+        total_docs = data_ctx.get("total_documents_in_index", 0)
+        r.add_check("total_unique_ids > 0", total_unique > 0, f"total_unique_ids: {total_unique}")
+        r.add_check("total_docs > 0", total_docs > 0, f"total_docs: {total_docs}")
+        r.add_check("unique <= docs", total_unique <= total_docs,
+                   f"unique: {total_unique}, docs: {total_docs}")
+    results.append(r)
+    print(r)
+
+    # Test 15.2: Percentage calculation uses unique IDs
+    r = await run_test("15.2 Match percentage based on unique IDs",
+                       filters='{"country": "India"}',
+                       group_by="event_theme")
+    if r.response and r.response.get("status") == "success":
+        data_ctx = r.response.get("data_context", {})
+        percentage = data_ctx.get("match_percentage", 0)
+        unique_matched = data_ctx.get("unique_ids_matched", 0)
+        total_unique = data_ctx.get("total_unique_ids_in_index", 1)
+        expected_pct = round(unique_matched / total_unique * 100, 2)
+        pct_matches = abs(percentage - expected_pct) < 0.1
+        r.add_check("percentage matches calculation", pct_matches,
+                   f"actual: {percentage}, expected: {expected_pct}")
+    results.append(r)
+    print(r)
+
+    # Test 15.3: Aggregation bucket percentages sum correctly
+    r = await run_test("15.3 Bucket percentages are consistent",
+                       group_by="country",
+                       top_n=100)
+    if r.response and r.response.get("status") == "success":
+        aggs = r.response.get("aggregations", {})
+        buckets = aggs.get("group_by", {}).get("buckets", [])
+        total_pct = sum(b.get("percentage", 0) for b in buckets)
+        other_count = aggs.get("group_by", {}).get("other_count", 0)
+        # If no "other", percentages should sum to ~100%
+        if other_count == 0:
+            pct_valid = abs(total_pct - 100) < 1  # Allow 1% tolerance
+            r.add_check("percentages sum to ~100%", pct_valid,
+                       f"total: {total_pct}%")
+        else:
+            r.add_check("has other_count", True, f"other_count: {other_count}")
     results.append(r)
     print(r)
 

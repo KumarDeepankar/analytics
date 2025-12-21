@@ -32,6 +32,9 @@ MIN_WORD_OVERLAP_PERCENT = int(
     os.getenv("MIN_WORD_OVERLAP_PERCENT", "50")
 )
 
+# Field to use for 4-digit year pattern extraction (empty = disabled)
+YEAR_FIELD = os.getenv("YEAR_FIELD", "year").strip() or None
+
 # Common stopwords to ignore during classification
 DEFAULT_STOPWORDS = {
     "list", "show", "get", "find", "search", "all", "the", "a", "an",
@@ -349,16 +352,16 @@ async def classify_search_text(
         result.warnings.append("Search text contained only stopwords")
         return result
 
-    # Extract year if present
-    year, remaining_tokens = extract_year(tokens)
-    if year and "year" in numeric_fields:
-        result.classified_filters["year"] = year
-        result.classification_details["year"] = {
+    # Extract year if present (4-digit number 1900-2100)
+    year_value, remaining_tokens = extract_year(tokens)
+    if year_value and YEAR_FIELD and YEAR_FIELD in numeric_fields:
+        result.classified_filters[YEAR_FIELD] = year_value
+        result.classification_details[YEAR_FIELD] = {
             "match_type": "numeric_pattern",
             "confidence": 100,
-            "original_token": str(year)
+            "original_token": str(year_value)
         }
-        logger.info(f"Extracted year: {year}")
+        logger.info(f"Extracted year: {year_value} -> {YEAR_FIELD}")
 
     if not remaining_tokens:
         return result
@@ -462,5 +465,6 @@ def get_classifier_config() -> Dict[str, Any]:
     return {
         "confidence_threshold": CLASSIFICATION_CONFIDENCE_THRESHOLD,
         "min_word_overlap_percent": MIN_WORD_OVERLAP_PERCENT,
+        "year_field": YEAR_FIELD,
         "stopwords_count": len(STOPWORDS)
     }

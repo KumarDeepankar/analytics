@@ -21,6 +21,7 @@ from rapidfuzz import fuzz
 from index_metadata import IndexMetadata
 from input_validator import InputValidator
 from text_search import text_search_with_filters
+from query_classifier import classify_search_text
 
 # Configure logging
 logging.basicConfig(
@@ -123,8 +124,9 @@ date: {', '.join(DATE_FIELDS)}
 </fields>
 
 <parameters>
-filters: JSON string - exact match '{{"country": "India", "year": 2023}}'
+filters: JSON string - exact match '{{"country": "India", "year": 2023}}' (PREFERRED - use when field is known)
 range_filters: JSON string - range '{{"year": {{"gte": 2020, "lte": 2024}}}}'
+fallback_search: str - LAST RESORT when field unknown. Auto-classifies to filters or text search. COMBINE with filters, group_by, or date_histogram for targeted results.
 group_by: str - single "country" or nested "country,year"
 date_histogram: JSON string - '{{"field": "event_date", "interval": "year|quarter|month|week|day"}}'
 numeric_histogram: JSON string - '{{"field": "event_count", "interval": 100}}'
@@ -172,6 +174,11 @@ Date range (month boundaries): range_filters='{{"event_date": {{"gte": "2023-06"
 Date range (open-ended from): range_filters='{{"event_date": {{"gte": "2023-01-01"}}}}', group_by="country"
 Date range (open-ended to): range_filters='{{"event_date": {{"lte": "2023-06-30"}}}}', group_by="country"
 Date range + trend: range_filters='{{"event_date": {{"gte": "2022", "lte": "2023"}}}}', date_histogram='{{"field": "event_date", "interval": "month"}}'
+
+# fallback_search examples (LAST RESORT - prefer filters when field is known):
+Fallback + aggregation: fallback_search="singing events", group_by="country"
+Fallback + filter + aggregation: fallback_search="winter conference", filters='{{"year": 2024}}', group_by="event_theme"
+Fallback + date trend: fallback_search="tech summit", date_histogram='{{"field": "event_date", "interval": "month"}}'
 </examples>
 
 <response>
@@ -188,7 +195,10 @@ warnings: [...] - fuzzy match warnings if any
 </response>
 
 <rules>
-- Provide at least one: filters OR aggregation (group_by/date_histogram/stats_fields/numeric_histogram)
+- ALWAYS prefer filters over fallback_search when you know which field to query
+- fallback_search is ONLY for vague user queries where the target field is unclear
+- When using fallback_search, ALWAYS combine with group_by or date_histogram for better results
+- Provide at least one: filters OR fallback_search OR aggregation (group_by/date_histogram/stats_fields)
 - Use keyword fields for filters and group_by
 - Use numeric fields for stats_fields and numeric_histogram
 - Use date fields for date_histogram
@@ -393,6 +403,7 @@ async def resolve_keyword_filter(
 async def analyze_events(
     filters: Optional[str] = None,
     range_filters: Optional[str] = None,
+    fallback_search: Optional[str] = None,
     group_by: Optional[str] = None,
     date_histogram: Optional[str] = None,
     numeric_histogram: Optional[str] = None,
@@ -434,6 +445,42 @@ async def analyze_events(
             return ToolResult(content=[], structured_content={
                 "error": f"Invalid filters JSON: {e}"
             })
+
+    # ===== CLASSIFY FALLBACK_SEARCH (if provided) =====
+    classification_result = None
+    fallback_unclassified_terms = []
+
+    if fallback_search and fallback_search.strip():
+        logger.info(f"Processing fallback_search: '{fallback_search}'")
+
+        classification_result = await classify_search_text(
+            search_text=fallback_search,
+            keyword_fields=KEYWORD_FIELDS,
+            word_search_fields=WORD_SEARCH_FIELDS,
+            fuzzy_search_fields=FUZZY_SEARCH_FIELDS,
+            numeric_fields=NUMERIC_FIELDS,
+            opensearch_request=opensearch_request,
+            index_name=INDEX_NAME
+        )
+
+        # Merge classified filters (explicit filters take precedence)
+        for field, value in classification_result.classified_filters.items():
+            if field not in parsed_filters:
+                parsed_filters[field] = value
+                warnings.append(f"Auto-classified '{field}' = '{value}' from fallback_search")
+
+        # Store unclassified terms for text search fallback
+        fallback_unclassified_terms = classification_result.unclassified_terms
+
+        # Add classification details to query context
+        query_context["fallback_search"] = {
+            "original_query": fallback_search,
+            "classified_filters": classification_result.classified_filters,
+            "unclassified_terms": classification_result.unclassified_terms,
+            "classification_details": classification_result.classification_details
+        }
+
+        warnings.extend(classification_result.warnings)
 
     parsed_range_filters = {}
     if range_filters:
@@ -586,6 +633,11 @@ async def analyze_events(
 
         query_context["filters_applied"][field] = value
 
+    # Add unclassified terms from fallback_search to search_terms
+    if fallback_unclassified_terms:
+        search_terms.extend(fallback_unclassified_terms)
+        logger.info(f"Adding unclassified terms to text search: {fallback_unclassified_terms}")
+
     # ===== VALIDATE AND NORMALIZE RANGE FILTERS =====
 
     for field, range_spec in parsed_range_filters.items():
@@ -655,14 +707,15 @@ async def analyze_events(
         return ToolResult(content=[], structured_content={
             "status": "empty_query",
             "error": "Query is empty - specify filter or aggregation",
-            "message": "Provide at least one: filters OR (group_by / date_histogram / stats_fields)",
+            "message": "Provide at least one: filters OR fallback_search OR (group_by / date_histogram / stats_fields)",
             "examples": {
                 "filter_only": {"filters": "{\"country\": \"India\"}"},
                 "group_by_country": {"group_by": "country"},
                 "group_by_theme": {"group_by": "event_theme"},
                 "monthly_trend": {"date_histogram": "{\"field\": \"event_date\", \"interval\": \"month\"}"},
                 "stats": {"stats_fields": "event_count"},
-                "filter_and_group": {"filters": "{\"country\": \"India\"}", "group_by": "event_theme"}
+                "filter_and_group": {"filters": "{\"country\": \"India\"}", "group_by": "event_theme"},
+                "fallback_search_with_group": {"fallback_search": "tech summit", "group_by": "country"}
             },
             "available_fields": {
                 "filters": ALL_FILTER_FIELDS,

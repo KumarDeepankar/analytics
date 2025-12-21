@@ -885,6 +885,130 @@ async def main():
     print(r)
 
     # =========================================================================
+    # TEST GROUP 16: FALLBACK_SEARCH (Query Classification)
+    # =========================================================================
+    print("\n" + "=" * 90)
+    print("[16] FALLBACK_SEARCH (Query Classification)")
+    print("=" * 90)
+
+    # Test 16.1: fallback_search with classifiable country
+    r = await run_test("16.1 fallback_search: 'India' classifies to country filter",
+                       fallback_search="India",
+                       group_by="event_theme")
+    if r.response and r.response.get("status") == "success":
+        query_ctx = r.response.get("query_context", {})
+        fb_ctx = query_ctx.get("fallback_search", {})
+        classified = fb_ctx.get("classified_filters", {})
+        has_country = "country" in classified
+        r.add_check("country classified", has_country, f"classified: {classified}")
+    check_response(r, {
+        "status": "success",
+        "mode": "aggregation",
+        "no_error": True
+    })
+    results.append(r)
+    print(r)
+
+    # Test 16.2: fallback_search with year extraction
+    r = await run_test("16.2 fallback_search: 'summit 2023' extracts year",
+                       fallback_search="summit 2023",
+                       group_by="country")
+    if r.response:
+        query_ctx = r.response.get("query_context", {})
+        fb_ctx = query_ctx.get("fallback_search", {})
+        classified = fb_ctx.get("classified_filters", {})
+        has_year = "year" in classified and classified.get("year") == 2023
+        r.add_check("year=2023 classified", has_year, f"classified: {classified}")
+    check_response(r, {
+        "status": "success",
+        "no_error": True
+    })
+    results.append(r)
+    print(r)
+
+    # Test 16.3: fallback_search combined with explicit filter
+    r = await run_test("16.3 fallback_search + explicit filter (explicit takes precedence)",
+                       fallback_search="Japan 2024",
+                       filters='{"year": 2023}',
+                       group_by="country")
+    if r.response and r.response.get("status") == "success":
+        query_ctx = r.response.get("query_context", {})
+        filters_applied = query_ctx.get("filters_applied", {})
+        # Explicit year=2023 should take precedence over classified year=2024
+        year_is_2023 = filters_applied.get("year") == 2023
+        r.add_check("explicit year=2023 takes precedence", year_is_2023,
+                   f"filters_applied: {filters_applied}")
+    check_response(r, {
+        "status": "success",
+        "no_error": True
+    })
+    results.append(r)
+    print(r)
+
+    # Test 16.4: fallback_search with unclassifiable terms triggers text search
+    r = await run_test("16.4 fallback_search: unclassifiable terms -> text search",
+                       fallback_search="amazing wonderful spectacular")
+    if r.response:
+        # Should either fall back to text search or have unclassified terms
+        status = r.response.get("status")
+        mode = r.response.get("mode")
+        query_ctx = r.response.get("query_context", {})
+        fb_ctx = query_ctx.get("fallback_search", {})
+        unclassified = fb_ctx.get("unclassified_terms", [])
+        # Either text search mode or has unclassified terms
+        is_text_search = mode == "search" or len(unclassified) > 0
+        r.add_check("triggers text search or has unclassified", is_text_search,
+                   f"mode: {mode}, unclassified: {unclassified}")
+    results.append(r)
+    print(r)
+
+    # Test 16.5: fallback_search with partial match (word-level)
+    r = await run_test("16.5 fallback_search: 'energy sector' matches via words",
+                       fallback_search="energy sector",
+                       group_by="country")
+    if r.response and r.response.get("status") == "success":
+        query_ctx = r.response.get("query_context", {})
+        fb_ctx = query_ctx.get("fallback_search", {})
+        classified = fb_ctx.get("classified_filters", {})
+        # Should have matched something via word matching
+        has_classification = len(classified) > 0
+        r.add_check("has classification", has_classification, f"classified: {classified}")
+    check_response(r, {
+        "status": "success",
+        "no_error": True
+    })
+    results.append(r)
+    print(r)
+
+    # Test 16.6: fallback_search with aggregation (recommended usage)
+    r = await run_test("16.6 fallback_search + group_by (recommended pattern)",
+                       fallback_search="conference",
+                       group_by="country",
+                       top_n=5)
+    check_response(r, {
+        "status": "success",
+        "mode": "aggregation",
+        "has_group_by": True,
+        "has_chart_config": True,
+        "no_error": True
+    })
+    results.append(r)
+    print(r)
+
+    # Test 16.7: fallback_search with date_histogram
+    r = await run_test("16.7 fallback_search + date_histogram",
+                       fallback_search="summit",
+                       date_histogram='{"field": "event_date", "interval": "year"}')
+    check_response(r, {
+        "status": "success",
+        "has_date_histogram": True,
+        "has_chart_config": True,
+        "no_error": True
+    })
+    results.append(r)
+    print(r)
+
+    # =========================================================================
     # SUMMARY
     # =========================================================================
     print("\n" + "=" * 90)

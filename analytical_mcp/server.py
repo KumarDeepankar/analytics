@@ -458,7 +458,6 @@ async def analyze_events(
             keyword_fields=KEYWORD_FIELDS,
             word_search_fields=WORD_SEARCH_FIELDS,
             fuzzy_search_fields=FUZZY_SEARCH_FIELDS,
-            numeric_fields=NUMERIC_FIELDS,
             opensearch_request=opensearch_request,
             index_name=INDEX_NAME
         )

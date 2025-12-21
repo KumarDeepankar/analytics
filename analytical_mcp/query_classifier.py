@@ -12,7 +12,7 @@ Classification priority:
 import os
 import re
 import logging
-from typing import List, Dict, Any, Callable, Set, Tuple
+from typing import List, Dict, Any, Callable, Set
 from dataclasses import dataclass, field
 from rapidfuzz import fuzz
 
@@ -32,8 +32,9 @@ MIN_WORD_OVERLAP_PERCENT = int(
     os.getenv("MIN_WORD_OVERLAP_PERCENT", "50")
 )
 
-# Field to use for 4-digit year pattern extraction (empty = disabled)
-YEAR_FIELD = os.getenv("YEAR_FIELD", "year").strip() or None
+# Single field to use for text classification (empty = disabled)
+# Only this field will be queried for n-gram matching
+CLASSIFICATION_FIELD = os.getenv("CLASSIFICATION_FIELD", "event_theme").strip() or None
 
 # Common stopwords to ignore during classification
 DEFAULT_STOPWORDS = {
@@ -93,31 +94,6 @@ def tokenize_query(text: str) -> List[str]:
     tokens = [w for w in words if w not in STOPWORDS or len(w) > 3]
 
     return tokens
-
-
-def extract_year(tokens: List[str]) -> Tuple[int | None, List[str]]:
-    """
-    Extract 4-digit year from tokens.
-
-    Args:
-        tokens: List of tokens
-
-    Returns:
-        Tuple of (year or None, remaining tokens)
-    """
-    year = None
-    remaining = []
-
-    for token in tokens:
-        if re.match(r'^\d{4}$', token):
-            candidate = int(token)
-            # Reasonable year range
-            if 1900 <= candidate <= 2100:
-                year = candidate
-                continue
-        remaining.append(token)
-
-    return year, remaining
 
 
 def generate_ngrams(tokens: List[str], max_n: int = 4) -> List[List[str]]:
@@ -308,7 +284,6 @@ async def classify_search_text(
     keyword_fields: List[str],
     word_search_fields: List[str],
     fuzzy_search_fields: List[str],
-    numeric_fields: List[str],
     opensearch_request: Callable,
     index_name: str,
     confidence_threshold: int = None
@@ -317,17 +292,15 @@ async def classify_search_text(
     Classify free-form search text into structured filters.
 
     Strategy:
-    1. Extract numeric values (year)
-    2. Try n-gram matching against keyword fields using .words sub-field
-    3. Fall back to .fuzzy matching for remaining terms
-    4. Unmatched terms go to free text search
+    1. Tokenize and remove stopwords
+    2. Try n-gram matching against CLASSIFICATION_FIELD using .words/.fuzzy
+    3. Unmatched terms go to free text search
 
     Args:
         search_text: Raw search query from user
         keyword_fields: List of keyword fields to match against
         word_search_fields: Fields that support .words sub-field
         fuzzy_search_fields: Fields that support .fuzzy sub-field
-        numeric_fields: Numeric fields (for year extraction)
         opensearch_request: Async function to make OpenSearch requests
         index_name: Index name
         confidence_threshold: Minimum confidence to accept match (default from env)
@@ -345,102 +318,72 @@ async def classify_search_text(
 
     logger.info(f"Classifying search text: '{search_text}'")
 
-    # Step 1: Tokenize and extract year
+    # Step 1: Tokenize
     tokens = tokenize_query(search_text)
 
     if not tokens:
         result.warnings.append("Search text contained only stopwords")
         return result
 
-    # Extract year if present (4-digit number 1900-2100)
-    year_value, remaining_tokens = extract_year(tokens)
-    if year_value and YEAR_FIELD and YEAR_FIELD in numeric_fields:
-        result.classified_filters[YEAR_FIELD] = year_value
-        result.classification_details[YEAR_FIELD] = {
-            "match_type": "numeric_pattern",
-            "confidence": 100,
-            "original_token": str(year_value)
-        }
-        logger.info(f"Extracted year: {year_value} -> {YEAR_FIELD}")
-
-    if not remaining_tokens:
-        return result
-
     # Step 2: Track which tokens have been matched
     matched_tokens: Set[str] = set()
 
-    # Step 3: Try n-gram matching against each field
-    # Priority: More specific fields first (fuzzy-only like country),
-    # then broader fields (word_search like event_title)
+    # Step 3: Try n-gram matching against SINGLE configured field only
+    if not CLASSIFICATION_FIELD or CLASSIFICATION_FIELD not in keyword_fields:
+        # No valid classification field configured - all tokens go to text search
+        result.unclassified_terms = tokens
+        if CLASSIFICATION_FIELD:
+            result.warnings.append(f"CLASSIFICATION_FIELD '{CLASSIFICATION_FIELD}' not in keyword_fields")
+        return result
 
-    # Sort fields: fuzzy-only fields first (more specific, fewer unique values)
-    # then word_search_fields (broader, more unique values)
-    priority_fields = []
-    for f in keyword_fields:
-        if f in fuzzy_search_fields and f not in word_search_fields:
-            priority_fields.insert(0, f)  # Higher priority - specific fields
-        elif f in fuzzy_search_fields or f in word_search_fields:
-            priority_fields.append(f)  # Lower priority - broader fields
+    field = CLASSIFICATION_FIELD
+    use_words = field in word_search_fields
+    use_fuzzy = field in fuzzy_search_fields
 
-    # Generate n-grams from remaining tokens
-    ngrams = generate_ngrams(remaining_tokens, max_n=4)
+    # Generate n-grams from remaining tokens (largest first)
+    ngrams = generate_ngrams(tokens, max_n=4)
 
     for ngram in ngrams:
         # Skip if all tokens in this n-gram are already matched
         if all(t in matched_tokens for t in ngram):
             continue
 
+        # Skip if field already has a match (only one match per field)
+        if field in result.classified_filters:
+            continue
+
         ngram_text = " ".join(ngram)
-        best_field_match = None
+        best_match = None
         best_confidence = 0
 
-        for field in priority_fields:
-            # Skip if field already has a match
-            if field in result.classified_filters:
-                continue
+        # Try .words field (token-level matching)
+        if use_words:
+            match_result = await match_against_words_field(
+                ngram_text, field, opensearch_request, index_name,
+                min_should_match=f"{MIN_WORD_OVERLAP_PERCENT}%"
+            )
+            if match_result["confidence"] > best_confidence:
+                best_confidence = match_result["confidence"]
+                best_match = match_result
 
-            # Try .words field first (token-level matching)
-            if field in word_search_fields:
-                match_result = await match_against_words_field(
-                    ngram_text, field, opensearch_request, index_name,
-                    min_should_match=f"{MIN_WORD_OVERLAP_PERCENT}%"
-                )
-
-                if match_result["confidence"] > best_confidence:
-                    best_confidence = match_result["confidence"]
-                    best_field_match = {
-                        "field": field,
-                        "match_result": match_result,
-                        "ngram": ngram
-                    }
-
-            # Try .fuzzy field (whole-string matching)
-            if field in fuzzy_search_fields:
-                match_result = await match_against_fuzzy_field(
-                    ngram_text, field, opensearch_request, index_name
-                )
-
-                if match_result["confidence"] > best_confidence:
-                    best_confidence = match_result["confidence"]
-                    best_field_match = {
-                        "field": field,
-                        "match_result": match_result,
-                        "ngram": ngram
-                    }
+        # Try .fuzzy field (whole-string matching)
+        if use_fuzzy:
+            match_result = await match_against_fuzzy_field(
+                ngram_text, field, opensearch_request, index_name
+            )
+            if match_result["confidence"] > best_confidence:
+                best_confidence = match_result["confidence"]
+                best_match = match_result
 
         # Accept match if above threshold
-        if best_field_match and best_confidence >= confidence_threshold:
-            field = best_field_match["field"]
-            match_result = best_field_match["match_result"]
-            ngram = best_field_match["ngram"]
-
-            result.classified_filters[field] = match_result["matched_value"]
+        if best_match and best_confidence >= confidence_threshold:
+            result.classified_filters[field] = best_match["matched_value"]
             result.classification_details[field] = {
-                "match_type": match_result["match_type"],
-                "confidence": round(match_result["confidence"], 1),
+                "match_type": best_match["match_type"],
+                "confidence": round(best_match["confidence"], 1),
                 "query_terms": ngram,
-                "matched_value": match_result["matched_value"],
-                "candidates_considered": match_result.get("all_candidates", [])
+                "matched_value": best_match["matched_value"],
+                "candidates_considered": best_match.get("all_candidates", [])
             }
 
             # Mark tokens as matched
@@ -452,7 +395,7 @@ async def classify_search_text(
             )
 
     # Step 4: Collect unmatched tokens
-    result.unclassified_terms = [t for t in remaining_tokens if t not in matched_tokens]
+    result.unclassified_terms = [t for t in tokens if t not in matched_tokens]
 
     if result.unclassified_terms:
         logger.info(f"Unclassified terms (will use text search): {result.unclassified_terms}")
@@ -465,6 +408,6 @@ def get_classifier_config() -> Dict[str, Any]:
     return {
         "confidence_threshold": CLASSIFICATION_CONFIDENCE_THRESHOLD,
         "min_word_overlap_percent": MIN_WORD_OVERLAP_PERCENT,
-        "year_field": YEAR_FIELD,
+        "classification_field": CLASSIFICATION_FIELD,
         "stopwords_count": len(STOPWORDS)
     }

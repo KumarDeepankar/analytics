@@ -270,38 +270,35 @@ async def main():
     print(r)
 
     # =========================================================================
-    # TEST GROUP 2: AUTO-CORRECTION (NEW FEATURE)
+    # TEST GROUP 2: TEXT SEARCH FALLBACK (When filter doesn't match)
     # =========================================================================
     print("\n" + "=" * 90)
-    print("[2] AUTO-CORRECTION (Wrong Field Detection)")
+    print("[2] TEXT SEARCH FALLBACK (When Filter Doesn't Match)")
     print("=" * 90)
 
-    # Test 2.1: Value in wrong field - should auto-correct
-    r = await run_test("2.1 Auto-correct: 'India' in event_theme (should correct to country)",
+    # Test 2.1: Value not in field - falls back to text search
+    r = await run_test("2.1 Text search fallback: 'India' in event_theme (uses text search)",
                        filters='{"event_theme": "India"}',
                        group_by="event_theme")
     check_response(r, {
         "status": "success",
+        "mode": "search",
         "has_warnings": True,
-        "warning_contains": "auto-correct",
-        "has_chart_config": True,
-        "chart_config_not_empty": True,
-        "has_aggregations": True
+        "warning_contains": "text search",
+        "has_documents": True
     })
     results.append(r)
     print(r)
 
-    # Test 2.2: Auto-correct with aggregation - verify chart_config has data
-    r = await run_test("2.2 Auto-correct + group_by: chart_config should have data",
+    # Test 2.2: Text search fallback finds documents
+    r = await run_test("2.2 Text search fallback: 'Japan' finds matching documents",
                        filters='{"event_theme": "Japan"}',
-                       group_by="event_theme",
                        top_n=5)
     check_response(r, {
         "status": "success",
+        "mode": "search",
         "has_warnings": True,
-        "has_chart_config": True,
-        "chart_config_not_empty": True,
-        "has_group_by": True
+        "has_documents": True
     })
     results.append(r)
     print(r)

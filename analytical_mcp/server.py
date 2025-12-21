@@ -175,7 +175,7 @@ Date range + trend: range_filters='{{"event_date": {{"gte": "2022", "lte": "2023
 </examples>
 
 <response>
-status: "success" | "error" | "did_you_mean" | "no_match"
+status: "success" | "error" | "no_match" | "search_fallback"
 mode: "filter_only" | "aggregation"
 filters_used: {{field: value}} - resolved filter values
 exact_match: bool - true if all filters matched exactly
@@ -356,32 +356,6 @@ async def resolve_keyword_filter(
                 best_match = matched_values[0]
                 confidence = fuzz.ratio(value.lower(), str(best_match).lower())
 
-                # Check if this looks like a word match (query is subset of match)
-                query_words = set(value.lower().split())
-                match_words = set(str(best_match).lower().split())
-                is_word_match = query_words.issubset(match_words) and len(query_words) < len(match_words)
-
-                # IMPORTANT: Before accepting a fuzzy match with low confidence,
-                # check if there's an EXACT match in another field
-                # Skip this check for word matches (low confidence is expected)
-                if confidence < 90 and not is_word_match:
-                    cross_field_matches = await search_value_across_fields(value, exclude_field=field)
-                    exact_cross_matches = [m for m in cross_field_matches if m["match_type"] == "exact"]
-
-                    if exact_cross_matches:
-                        # Found exact match in different field - suggest that instead
-                        return {
-                            "match_type": "wrong_field",
-                            "query_value": value,
-                            "matched_values": [],
-                            "filter_clause": None,
-                            "confidence": 0,
-                            "hit_count": 0,
-                            "wrong_field": field,
-                            "fuzzy_would_match": {"field": field, "value": best_match, "confidence": confidence},
-                            "did_you_mean": exact_cross_matches
-                        }
-
                 # Build filter for all matched values
                 if len(matched_values) == 1:
                     filter_clause = {"term": {field: matched_values[0]}}
@@ -400,23 +374,7 @@ async def resolve_keyword_filter(
         except Exception as e:
             logger.warning(f"Fuzzy match query failed: {e}")
 
-    # No match found in specified field - search across ALL keyword fields
-    cross_field_matches = await search_value_across_fields(value, exclude_field=field)
-
-    if cross_field_matches:
-        # Found in a different field!
-        return {
-            "match_type": "wrong_field",
-            "query_value": value,
-            "matched_values": [],
-            "filter_clause": None,
-            "confidence": 0,
-            "hit_count": 0,
-            "wrong_field": field,
-            "did_you_mean": cross_field_matches
-        }
-
-    # No match found anywhere
+    # No match found
     return {
         "match_type": "none",
         "query_value": value,
@@ -425,68 +383,6 @@ async def resolve_keyword_filter(
         "confidence": 0,
         "hit_count": 0
     }
-
-
-async def search_value_across_fields(value: str, exclude_field: str = None) -> List[Dict[str, Any]]:
-    """
-    Search for a value across all keyword fields.
-    Returns list of matches with field name and matched value.
-    Used for "did you mean?" suggestions when value is in wrong field.
-    """
-    matches = []
-    value_lower = value.lower().strip()
-
-    search_fields = [f for f in FUZZY_SEARCH_FIELDS if f != exclude_field]
-
-    for field in search_fields:
-        # Try exact/case-insensitive match first
-        exact_query = {
-            "size": 0,
-            "aggs": {
-                "values": {
-                    "terms": {"field": field, "size": 100}
-                }
-            }
-        }
-
-        try:
-            result = await opensearch_request("POST", f"{INDEX_NAME}/_search", exact_query)
-            buckets = result.get("aggregations", {}).get("values", {}).get("buckets", [])
-
-            for bucket in buckets:
-                bucket_value = str(bucket["key"])
-                if bucket_value.lower() == value_lower:
-                    # Exact match in different field
-                    matches.append({
-                        "field": field,
-                        "value": bucket_value,
-                        "match_type": "exact",
-                        "confidence": 100,
-                        "doc_count": bucket["doc_count"]
-                    })
-                    break
-
-            # If no exact match, try fuzzy
-            if not any(m["field"] == field for m in matches):
-                for bucket in buckets:
-                    bucket_value = str(bucket["key"])
-                    score = fuzz.ratio(value_lower, bucket_value.lower())
-                    if score >= 75:  # Fuzzy threshold
-                        matches.append({
-                            "field": field,
-                            "value": bucket_value,
-                            "match_type": "fuzzy",
-                            "confidence": score,
-                            "doc_count": bucket["doc_count"]
-                        })
-                        break
-
-        except Exception as e:
-            logger.warning(f"Cross-field search failed for {field}: {e}")
-
-    # Sort by confidence
-    matches.sort(key=lambda x: x["confidence"], reverse=True)
-    return matches
 
 
 # ============================================================================
@@ -620,49 +516,6 @@ async def analyze_events(
         if field in KEYWORD_FIELDS:
             # Use OpenSearch-based fuzzy resolution
             resolve_result = await resolve_keyword_filter(field, str(value))
-
-            if resolve_result["match_type"] == "wrong_field":
-                # Value found in a DIFFERENT field - auto-correct and continue
-                did_you_mean = resolve_result.get("did_you_mean", [])
-
-                if did_you_mean:
-                    # Auto-correct: use the correct field and value
-                    correct_field = did_you_mean[0]["field"]
-                    correct_value = did_you_mean[0]["value"]
-
-                    # Add warning about auto-correction
-                    warnings.append(
-                        f"Auto-corrected: '{value}' not found in '{field}', "
-                        f"using '{correct_field}': '{correct_value}' instead"
-                    )
-
-                    # Store correction metadata
-                    match_metadata[correct_field] = {
-                        "match_type": "auto_corrected",
-                        "original_field": field,
-                        "query_value": value,
-                        "matched_values": [correct_value],
-                        "confidence": did_you_mean[0].get("confidence", 100)
-                    }
-
-                    # Build filter with corrected field/value
-                    filter_clauses.append({"term": {correct_field: correct_value}})
-
-                    query_context["filters_normalized"][correct_field] = {
-                        "original_field": field,
-                        "original_value": value,
-                        "corrected_to": correct_value,
-                        "match_type": "auto_corrected"
-                    }
-
-                    # Skip the rest of this iteration - filter already added
-                    continue
-                else:
-                    # No suggestions available - skip this filter with warning
-                    warnings.append(
-                        f"Skipped filter: '{value}' not found in '{field}' and no correction available"
-                    )
-                    continue
 
             if resolve_result["match_type"] == "none":
                 # No match found - add to search_terms for text search fallback

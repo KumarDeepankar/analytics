@@ -757,7 +757,7 @@ async def analyze_events(
                     "documents_matched": search_result["total_hits"],
                     "max_score": search_result["max_score"],
                     "fields_searched": search_result["fields_searched"],
-                    "filters_applied": {f: v for f, v in parsed_filters.items() if f in [c.get("term", {}).keys() for c in filter_clauses]} if filter_clauses else {}
+                    "filters_applied": {f: v for f, v in parsed_filters.items() if any(f in c.get("term", {}) or f in c.get("range", {}) for c in filter_clauses)} if filter_clauses else {}
                 },
                 "documents": search_result["documents"],
                 "warnings": warnings,

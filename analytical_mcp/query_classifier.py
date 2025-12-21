@@ -55,16 +55,6 @@ STOPWORDS = set(
 # =============================================================================
 
 @dataclass
-class FieldMatch:
-    """Result of matching a term/phrase against a field."""
-    field: str
-    matched_value: Any
-    confidence: float
-    match_type: str  # "exact", "fuzzy", "words"
-    query_terms: List[str]  # Original terms that were matched
-
-
-@dataclass
 class ClassificationResult:
     """Result of classifying a search query."""
     classified_filters: Dict[str, Any] = field(default_factory=dict)
@@ -390,8 +380,8 @@ async def classify_search_text(
             matched_tokens.update(ngram)
 
             logger.info(
-                f"Classified '{ngram_text}' -> {field}='{match_result['matched_value']}' "
-                f"(confidence: {match_result['confidence']:.1f}%)"
+                f"Classified '{ngram_text}' -> {field}='{best_match['matched_value']}' "
+                f"(confidence: {best_match['confidence']:.1f}%)"
             )
 
     # Step 4: Collect unmatched tokens

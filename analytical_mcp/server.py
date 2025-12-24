@@ -1013,7 +1013,7 @@ async def analyze_events(
     # Group by results (supports multi-level)
     if group_by_fields and "group_by_agg" in aggs:
 
-        def extract_nested_buckets(agg_data: dict, fields: List[str], depth: int = 0) -> List[dict]:
+        async def extract_nested_buckets(agg_data: dict, fields: List[str], depth: int = 0) -> List[dict]:
             """Recursively extract nested aggregation buckets with unique ID counts."""
             results = []
             buckets = agg_data.get("buckets", [])
@@ -1033,14 +1033,21 @@ async def analyze_events(
                     )
                 }
 
-                # Add samples if present (at deepest level) - using new deduplicated structure
+                # Add samples if present (at deepest level) - fetch and merge docs per unique ID
                 if "unique_samples" in b:
-                    # Extract one doc per unique ID
-                    samples_list = []
-                    for id_bucket in b["unique_samples"].get("buckets", []):
-                        sample_hits = id_bucket.get("sample_doc", {}).get("hits", {}).get("hits", [])
-                        if sample_hits:
-                            samples_list.append(sample_hits[0]["_source"])
+                    # Collect unique IDs from sample buckets
+                    sample_ids = [id_bucket["key"] for id_bucket in b["unique_samples"].get("buckets", [])]
+                    if sample_ids:
+                        # Fetch and merge all docs for each unique ID
+                        samples_list = await get_merged_documents_batch(
+                            unique_ids=sample_ids,
+                            opensearch_request=opensearch_request,
+                            index_name=INDEX_NAME,
+                            unique_id_field=UNIQUE_ID_FIELD,
+                            source_fields=RESULT_FIELDS
+                        )
+                    else:
+                        samples_list = []
 
                     item["samples"] = samples_list
                     item["samples_returned"] = len(samples_list)
@@ -1050,14 +1057,14 @@ async def analyze_events(
                 if "nested" in b and len(fields) > 1:
                     item["sub_groups"] = {
                         "field": fields[1],
-                        "buckets": extract_nested_buckets(b["nested"], fields[1:], depth + 1)
+                        "buckets": await extract_nested_buckets(b["nested"], fields[1:], depth + 1)
                     }
 
                 results.append(item)
 
             return results
 
-        group_results = extract_nested_buckets(aggs["group_by_agg"], group_by_fields)
+        group_results = await extract_nested_buckets(aggs["group_by_agg"], group_by_fields)
 
         # Calculate other count based on unique RIDs
         top_n_count = sum(r["count"] for r in group_results)

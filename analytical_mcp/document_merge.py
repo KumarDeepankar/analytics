@@ -1,8 +1,8 @@
 """
 Document Merge Module for Analytical MCP Server.
 
-Merges multiple documents with the same RID into a single consolidated document.
-Merge fields are configurable via MERGE_FIELDS environment variable.
+Merges multiple documents with the same unique ID into a single consolidated document.
+All field names are configurable - no hardcoded field names in methods.
 """
 import os
 import logging
@@ -13,6 +13,9 @@ logger = logging.getLogger(__name__)
 # =============================================================================
 # CONFIGURATION
 # =============================================================================
+
+# The unique identifier field used for grouping documents
+UNIQUE_ID_FIELD = os.getenv("UNIQUE_ID_FIELD", "rid")
 
 # Configurable fields to merge (comma-separated)
 # These fields will be collected into arrays when merging documents
@@ -32,8 +35,8 @@ SINGLE_VALUE_FIELDS = [
     ).split(",") if f.strip()
 ]
 
-# Maximum documents to fetch per RID
-MAX_DOCS_PER_RID = int(os.getenv("MAX_DOCS_PER_RID", "100"))
+# Maximum documents to fetch per unique ID
+MAX_DOCS_PER_ID = int(os.getenv("MAX_DOCS_PER_ID", os.getenv("MAX_DOCS_PER_RID", "100")))
 
 # Whether to deduplicate array values
 DEDUPLICATE_ARRAYS = os.getenv("DEDUPLICATE_ARRAYS", "true").lower() == "true"
@@ -43,27 +46,32 @@ DEDUPLICATE_ARRAYS = os.getenv("DEDUPLICATE_ARRAYS", "true").lower() == "true"
 # MERGE FUNCTIONS
 # =============================================================================
 
-async def fetch_documents_by_rid(
-    rid: str,
+async def fetch_documents_by_id(
+    unique_id: str,
     opensearch_request: Callable,
     index_name: str,
+    unique_id_field: Optional[str] = None,
     source_fields: Optional[List[str]] = None
 ) -> List[Dict[str, Any]]:
     """
-    Fetch all documents for a given RID.
+    Fetch all documents for a given unique ID.
 
     Args:
-        rid: The unique RID to fetch documents for
+        unique_id: The unique ID value to fetch documents for
         opensearch_request: Async function to make OpenSearch requests
         index_name: Name of the index
+        unique_id_field: Field name for unique ID (default: UNIQUE_ID_FIELD)
         source_fields: Fields to include (None = all)
 
     Returns:
         List of document dictionaries
     """
+    if unique_id_field is None:
+        unique_id_field = UNIQUE_ID_FIELD
+
     query = {
-        "size": MAX_DOCS_PER_RID,
-        "query": {"term": {"rid": rid}},
+        "size": MAX_DOCS_PER_ID,
+        "query": {"term": {unique_id_field: unique_id}},
         "sort": [{"_doc": "asc"}]  # Consistent ordering
     }
 
@@ -74,13 +82,14 @@ async def fetch_documents_by_rid(
         result = await opensearch_request("POST", f"{index_name}/_search", query)
         return [hit["_source"] for hit in result.get("hits", {}).get("hits", [])]
     except Exception as e:
-        logger.error(f"Failed to fetch documents for RID {rid}: {e}")
+        logger.error(f"Failed to fetch documents for {unique_id_field}={unique_id}: {e}")
         return []
 
 
 def merge_documents(
     documents: List[Dict[str, Any]],
-    rid: str,
+    unique_id: str,
+    unique_id_field: Optional[str] = None,
     merge_fields: Optional[List[str]] = None,
     single_value_fields: Optional[List[str]] = None,
     deduplicate: bool = None
@@ -90,7 +99,8 @@ def merge_documents(
 
     Args:
         documents: List of documents to merge
-        rid: The RID for these documents
+        unique_id: The unique ID value for these documents
+        unique_id_field: Field name for unique ID (default: UNIQUE_ID_FIELD)
         merge_fields: Fields to collect into arrays (default: MERGE_FIELDS)
         single_value_fields: Fields to keep as single value (default: SINGLE_VALUE_FIELDS)
         deduplicate: Whether to deduplicate array values (default: DEDUPLICATE_ARRAYS)
@@ -98,6 +108,8 @@ def merge_documents(
     Returns:
         Merged document dictionary
     """
+    if unique_id_field is None:
+        unique_id_field = UNIQUE_ID_FIELD
     if merge_fields is None:
         merge_fields = MERGE_FIELDS
     if single_value_fields is None:
@@ -106,10 +118,10 @@ def merge_documents(
         deduplicate = DEDUPLICATE_ARRAYS
 
     if not documents:
-        return {"rid": rid, "doc_count": 0, "merged": False}
+        return {unique_id_field: unique_id, "doc_count": 0, "merged": False}
 
     merged = {
-        "rid": rid,
+        unique_id_field: unique_id,
         "doc_count": len(documents),
         "merged": len(documents) > 1
     }
@@ -120,7 +132,8 @@ def merge_documents(
         all_fields.update(doc.keys())
 
     for field in all_fields:
-        if field == "rid":
+        # Skip the unique ID field - already set above
+        if field == unique_id_field:
             continue
 
         # Collect all values for this field
@@ -167,20 +180,22 @@ def merge_documents(
 
 
 async def get_merged_document(
-    rid: str,
+    unique_id: str,
     opensearch_request: Callable,
     index_name: str,
+    unique_id_field: Optional[str] = None,
     merge_fields: Optional[List[str]] = None,
     single_value_fields: Optional[List[str]] = None,
     source_fields: Optional[List[str]] = None
 ) -> Dict[str, Any]:
     """
-    Fetch and merge all documents for a RID into a single document.
+    Fetch and merge all documents for a unique ID into a single document.
 
     Args:
-        rid: The unique RID to fetch and merge
+        unique_id: The unique ID value to fetch and merge
         opensearch_request: Async function to make OpenSearch requests
         index_name: Name of the index
+        unique_id_field: Field name for unique ID (default: UNIQUE_ID_FIELD)
         merge_fields: Fields to collect into arrays
         single_value_fields: Fields to keep as single value
         source_fields: Fields to fetch from OpenSearch
@@ -188,24 +203,29 @@ async def get_merged_document(
     Returns:
         Merged document dictionary with status
     """
-    documents = await fetch_documents_by_rid(
-        rid=rid,
+    if unique_id_field is None:
+        unique_id_field = UNIQUE_ID_FIELD
+
+    documents = await fetch_documents_by_id(
+        unique_id=unique_id,
         opensearch_request=opensearch_request,
         index_name=index_name,
+        unique_id_field=unique_id_field,
         source_fields=source_fields
     )
 
     if not documents:
         return {
             "status": "not_found",
-            "rid": rid,
+            unique_id_field: unique_id,
             "doc_count": 0,
             "merged": False
         }
 
     merged = merge_documents(
         documents=documents,
-        rid=rid,
+        unique_id=unique_id,
+        unique_id_field=unique_id_field,
         merge_fields=merge_fields,
         single_value_fields=single_value_fields
     )
@@ -215,20 +235,22 @@ async def get_merged_document(
 
 
 async def get_merged_documents_batch(
-    rids: List[str],
+    unique_ids: List[str],
     opensearch_request: Callable,
     index_name: str,
+    unique_id_field: Optional[str] = None,
     merge_fields: Optional[List[str]] = None,
     single_value_fields: Optional[List[str]] = None,
     source_fields: Optional[List[str]] = None
 ) -> List[Dict[str, Any]]:
     """
-    Fetch and merge documents for multiple RIDs.
+    Fetch and merge documents for multiple unique IDs.
 
     Args:
-        rids: List of RIDs to fetch and merge
+        unique_ids: List of unique ID values to fetch and merge
         opensearch_request: Async function to make OpenSearch requests
         index_name: Name of the index
+        unique_id_field: Field name for unique ID (default: UNIQUE_ID_FIELD)
         merge_fields: Fields to collect into arrays
         single_value_fields: Fields to keep as single value
         source_fields: Fields to fetch from OpenSearch (None = all)
@@ -236,11 +258,14 @@ async def get_merged_documents_batch(
     Returns:
         List of merged documents
     """
-    # Fetch all documents for all RIDs in one query
+    if unique_id_field is None:
+        unique_id_field = UNIQUE_ID_FIELD
+
+    # Fetch all documents for all unique IDs in one query
     query = {
-        "size": MAX_DOCS_PER_RID * len(rids),
-        "query": {"terms": {"rid": rids}},
-        "sort": [{"rid": "asc"}, {"_doc": "asc"}]
+        "size": MAX_DOCS_PER_ID * len(unique_ids),
+        "query": {"terms": {unique_id_field: unique_ids}},
+        "sort": [{unique_id_field: "asc"}, {"_doc": "asc"}]
     }
 
     # Limit fields if specified
@@ -252,29 +277,39 @@ async def get_merged_documents_batch(
         all_docs = [hit["_source"] for hit in result.get("hits", {}).get("hits", [])]
     except Exception as e:
         logger.error(f"Failed to fetch documents for batch: {e}")
-        return [{"status": "error", "rid": rid, "error": str(e)} for rid in rids]
+        return [{
+            "status": "error",
+            unique_id_field: uid,
+            "error": str(e)
+        } for uid in unique_ids]
 
-    # Group documents by RID
-    docs_by_rid: Dict[str, List[Dict]] = {rid: [] for rid in rids}
+    # Group documents by unique ID
+    docs_by_id: Dict[str, List[Dict]] = {uid: [] for uid in unique_ids}
     for doc in all_docs:
-        rid = doc.get("rid")
-        if rid in docs_by_rid:
-            docs_by_rid[rid].append(doc)
+        uid = doc.get(unique_id_field)
+        if uid in docs_by_id:
+            docs_by_id[uid].append(doc)
 
-    # Merge each RID's documents
+    # Merge each unique ID's documents
     merged_docs = []
-    for rid in rids:
-        documents = docs_by_rid.get(rid, [])
+    for uid in unique_ids:
+        documents = docs_by_id.get(uid, [])
         if documents:
             merged = merge_documents(
                 documents=documents,
-                rid=rid,
+                unique_id=uid,
+                unique_id_field=unique_id_field,
                 merge_fields=merge_fields,
                 single_value_fields=single_value_fields
             )
             merged["status"] = "success"
         else:
-            merged = {"status": "not_found", "rid": rid, "doc_count": 0, "merged": False}
+            merged = {
+                "status": "not_found",
+                unique_id_field: uid,
+                "doc_count": 0,
+                "merged": False
+            }
         merged_docs.append(merged)
 
     return merged_docs
@@ -283,8 +318,9 @@ async def get_merged_documents_batch(
 def get_merge_config() -> Dict[str, Any]:
     """Return current merge configuration."""
     return {
+        "unique_id_field": UNIQUE_ID_FIELD,
         "merge_fields": MERGE_FIELDS,
         "single_value_fields": SINGLE_VALUE_FIELDS,
-        "max_docs_per_rid": MAX_DOCS_PER_RID,
+        "max_docs_per_id": MAX_DOCS_PER_ID,
         "deduplicate_arrays": DEDUPLICATE_ARRAYS
     }

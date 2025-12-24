@@ -754,9 +754,10 @@ async def analyze_events(
                 rids = [doc.get(UNIQUE_ID_FIELD) for doc in search_docs if doc.get(UNIQUE_ID_FIELD)]
                 if rids:
                     search_docs = await get_merged_documents_batch(
-                        rids=rids,
+                        unique_ids=rids,
                         opensearch_request=opensearch_request,
                         index_name=INDEX_NAME,
+                        unique_id_field=UNIQUE_ID_FIELD,
                         source_fields=RESULT_FIELDS
                     )
 
@@ -995,9 +996,10 @@ async def analyze_events(
         rids = [doc.get(UNIQUE_ID_FIELD) for doc in collapsed_documents if doc.get(UNIQUE_ID_FIELD)]
         if rids:
             documents = await get_merged_documents_batch(
-                rids=rids,
+                unique_ids=rids,
                 opensearch_request=opensearch_request,
                 index_name=INDEX_NAME,
+                unique_id_field=UNIQUE_ID_FIELD,
                 source_fields=RESULT_FIELDS
             )
         else:

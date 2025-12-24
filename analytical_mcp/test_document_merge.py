@@ -15,10 +15,11 @@ from document_merge import (
     get_merged_document,
     get_merged_documents_batch,
     get_merge_config,
-    fetch_documents_by_rid,
+    fetch_documents_by_id,
     MERGE_FIELDS,
     SINGLE_VALUE_FIELDS,
-    MAX_DOCS_PER_RID,
+    UNIQUE_ID_FIELD,
+    MAX_DOCS_PER_ID,
     DEDUPLICATE_ARRAYS
 )
 from server import startup, INDEX_NAME
@@ -62,7 +63,7 @@ def test_merge_empty_documents():
     """Test merging empty document list."""
     result = TestResult("Unit: merge empty documents")
     try:
-        merged = merge_documents([], rid="TEST001")
+        merged = merge_documents([], unique_id="TEST001", unique_id_field="rid")
 
         result.passed = True
 
@@ -90,7 +91,7 @@ def test_merge_single_document():
         docs = [
             {"rid": "TEST001", "country": "India", "event_title": "Tech Summit", "year": 2024}
         ]
-        merged = merge_documents(docs, rid="TEST001")
+        merged = merge_documents(docs, unique_id="TEST001", unique_id_field="rid")
 
         result.passed = True
 
@@ -125,7 +126,7 @@ def test_merge_multiple_documents_same_values():
             {"rid": "TEST001", "country": "India", "event_title": "Tech Summit"},
             {"rid": "TEST001", "country": "India", "event_title": "Tech Summit"}
         ]
-        merged = merge_documents(docs, rid="TEST001")
+        merged = merge_documents(docs, unique_id="TEST001", unique_id_field="rid")
 
         result.passed = True
 
@@ -162,7 +163,7 @@ def test_merge_multiple_documents_different_values():
             {"rid": "TEST001", "country": "India", "event_title": "Tech Summit 2024", "event_summary": "Summary 2"},
             {"rid": "TEST001", "country": "India", "event_title": "Tech Summit 2025", "event_summary": "Summary 3"}
         ]
-        merged = merge_documents(docs, rid="TEST001")
+        merged = merge_documents(docs, unique_id="TEST001", unique_id_field="rid")
 
         result.passed = True
 
@@ -206,7 +207,8 @@ def test_merge_with_custom_fields():
         # Custom config: country should be merged, custom_field single value
         merged = merge_documents(
             docs,
-            rid="TEST001",
+            unique_id="TEST001",
+            unique_id_field="rid",
             merge_fields=["country"],  # Override: merge country
             single_value_fields=["rid", "custom_field"]  # Override: custom_field is single
         )
@@ -243,7 +245,7 @@ def test_merge_no_deduplication():
             {"rid": "TEST001", "event_title": "Same Title"}
         ]
 
-        merged = merge_documents(docs, rid="TEST001", deduplicate=False)
+        merged = merge_documents(docs, unique_id="TEST001", unique_id_field="rid", deduplicate=False)
 
         result.passed = True
 
@@ -269,7 +271,7 @@ def test_merge_with_none_values():
             {"rid": "TEST001", "country": "India", "event_title": "Title 3", "event_summary": "Summary 3"}
         ]
 
-        merged = merge_documents(docs, rid="TEST001")
+        merged = merge_documents(docs, unique_id="TEST001", unique_id_field="rid")
 
         result.passed = True
 
@@ -300,14 +302,17 @@ def test_get_merge_config():
 
         result.passed = True
 
+        has_unique_id_field = "unique_id_field" in config
+        result.add_check("has unique_id_field", has_unique_id_field, f"value: {config.get('unique_id_field')}")
+
         has_merge_fields = "merge_fields" in config
         result.add_check("has merge_fields", has_merge_fields, f"keys: {list(config.keys())}")
 
         has_single_value = "single_value_fields" in config
         result.add_check("has single_value_fields", has_single_value, "")
 
-        has_max_docs = "max_docs_per_rid" in config
-        result.add_check("has max_docs_per_rid", has_max_docs, f"value: {config.get('max_docs_per_rid')}")
+        has_max_docs = "max_docs_per_id" in config
+        result.add_check("has max_docs_per_id", has_max_docs, f"value: {config.get('max_docs_per_id')}")
 
         has_dedupe = "deduplicate_arrays" in config
         result.add_check("has deduplicate_arrays", has_dedupe, f"value: {config.get('deduplicate_arrays')}")
@@ -323,9 +328,9 @@ def test_get_merge_config():
 # INTEGRATION TESTS: With OpenSearch
 # =============================================================================
 
-async def test_fetch_documents_by_rid():
-    """Test fetching documents by RID from OpenSearch."""
-    result = TestResult("Integration: fetch_documents_by_rid")
+async def test_fetch_documents_by_id():
+    """Test fetching documents by unique ID from OpenSearch."""
+    result = TestResult("Integration: fetch_documents_by_id")
     try:
         # First, get any RID from the index
         query = {"size": 1, "query": {"match_all": {}}}
@@ -337,20 +342,21 @@ async def test_fetch_documents_by_rid():
             result.passed = False
             return result
 
-        test_rid = hits[0]["_source"].get("rid")
+        test_rid = hits[0]["_source"].get(UNIQUE_ID_FIELD)
         if not test_rid:
-            result.add_check("document has rid", False, "First document has no rid")
+            result.add_check("document has unique_id", False, f"First document has no {UNIQUE_ID_FIELD}")
             result.passed = False
             return result
 
         result.passed = True
-        result.add_check("found test RID", True, f"rid: {test_rid}")
+        result.add_check("found test ID", True, f"{UNIQUE_ID_FIELD}: {test_rid}")
 
-        # Now fetch all documents for this RID
-        docs = await fetch_documents_by_rid(
-            rid=test_rid,
+        # Now fetch all documents for this ID
+        docs = await fetch_documents_by_id(
+            unique_id=test_rid,
             opensearch_request=opensearch_request,
-            index_name=INDEX_NAME
+            index_name=INDEX_NAME,
+            unique_id_field=UNIQUE_ID_FIELD
         )
 
         is_list = isinstance(docs, list)
@@ -359,9 +365,9 @@ async def test_fetch_documents_by_rid():
         has_docs = len(docs) > 0
         result.add_check("has documents", has_docs, f"count: {len(docs)}")
 
-        # Verify all docs have same RID
-        all_same_rid = all(d.get("rid") == test_rid for d in docs)
-        result.add_check("all docs have same rid", all_same_rid, f"rid: {test_rid}")
+        # Verify all docs have same ID
+        all_same_id = all(d.get(UNIQUE_ID_FIELD) == test_rid for d in docs)
+        result.add_check("all docs have same id", all_same_id, f"{UNIQUE_ID_FIELD}: {test_rid}")
 
     except Exception as e:
         result.error = str(e)
@@ -404,29 +410,30 @@ async def test_get_merged_document():
             search_result = await opensearch_request("POST", f"{INDEX_NAME}/_search", query)
             hits = search_result.get("hits", {}).get("hits", [])
             if hits:
-                test_rid = hits[0]["_source"].get("rid")
+                test_rid = hits[0]["_source"].get(UNIQUE_ID_FIELD)
                 doc_count = 1
 
         if not test_rid:
-            result.add_check("found test RID", False, "No RIDs in index")
+            result.add_check("found test ID", False, f"No {UNIQUE_ID_FIELD} in index")
             result.passed = False
             return result
 
         result.passed = True
-        result.add_check("found test RID", True, f"rid: {test_rid}, expected_docs: {doc_count}")
+        result.add_check("found test ID", True, f"{UNIQUE_ID_FIELD}: {test_rid}, expected_docs: {doc_count}")
 
         # Get merged document
         merged = await get_merged_document(
-            rid=test_rid,
+            unique_id=test_rid,
             opensearch_request=opensearch_request,
-            index_name=INDEX_NAME
+            index_name=INDEX_NAME,
+            unique_id_field=UNIQUE_ID_FIELD
         )
 
         status_success = merged.get("status") == "success"
         result.add_check("status is success", status_success, f"status: {merged.get('status')}")
 
-        has_rid = merged.get("rid") == test_rid
-        result.add_check("has correct rid", has_rid, f"rid: {merged.get('rid')}")
+        has_rid = merged.get(UNIQUE_ID_FIELD) == test_rid
+        result.add_check("has correct unique_id", has_rid, f"{UNIQUE_ID_FIELD}: {merged.get(UNIQUE_ID_FIELD)}")
 
         has_doc_count = "doc_count" in merged
         result.add_check("has doc_count", has_doc_count, f"doc_count: {merged.get('doc_count')}")
@@ -442,13 +449,14 @@ async def test_get_merged_document():
 
 
 async def test_get_merged_document_not_found():
-    """Test get_merged_document with non-existent RID."""
+    """Test get_merged_document with non-existent ID."""
     result = TestResult("Integration: get_merged_document (not found)")
     try:
         merged = await get_merged_document(
-            rid="NON_EXISTENT_RID_12345",
+            unique_id="NON_EXISTENT_ID_12345",
             opensearch_request=opensearch_request,
-            index_name=INDEX_NAME
+            index_name=INDEX_NAME,
+            unique_id_field=UNIQUE_ID_FIELD
         )
 
         result.passed = True
@@ -470,50 +478,51 @@ async def test_get_merged_document_not_found():
 
 
 async def test_get_merged_documents_batch():
-    """Test batch merging of multiple RIDs."""
+    """Test batch merging of multiple IDs."""
     result = TestResult("Integration: get_merged_documents_batch")
     try:
-        # Get 3 RIDs from the index
-        query = {"size": 3, "query": {"match_all": {}}, "collapse": {"field": "rid"}}
+        # Get 3 IDs from the index
+        query = {"size": 3, "query": {"match_all": {}}, "collapse": {"field": UNIQUE_ID_FIELD}}
         search_result = await opensearch_request("POST", f"{INDEX_NAME}/_search", query)
 
         hits = search_result.get("hits", {}).get("hits", [])
-        test_rids = [h["_source"].get("rid") for h in hits if h["_source"].get("rid")]
+        test_ids = [h["_source"].get(UNIQUE_ID_FIELD) for h in hits if h["_source"].get(UNIQUE_ID_FIELD)]
 
-        if len(test_rids) < 2:
-            result.add_check("found enough RIDs", False, f"found: {len(test_rids)}")
+        if len(test_ids) < 2:
+            result.add_check("found enough IDs", False, f"found: {len(test_ids)}")
             result.passed = False
             return result
 
         result.passed = True
-        result.add_check("found test RIDs", True, f"rids: {test_rids}")
+        result.add_check("found test IDs", True, f"{UNIQUE_ID_FIELD}s: {test_ids}")
 
-        # Add a non-existent RID to test mixed results
-        test_rids.append("NON_EXISTENT_RID_BATCH")
+        # Add a non-existent ID to test mixed results
+        test_ids.append("NON_EXISTENT_ID_BATCH")
 
         # Batch merge
         merged_docs = await get_merged_documents_batch(
-            rids=test_rids,
+            unique_ids=test_ids,
             opensearch_request=opensearch_request,
-            index_name=INDEX_NAME
+            index_name=INDEX_NAME,
+            unique_id_field=UNIQUE_ID_FIELD
         )
 
         is_list = isinstance(merged_docs, list)
         result.add_check("returns list", is_list, f"type: {type(merged_docs)}")
 
-        correct_count = len(merged_docs) == len(test_rids)
+        correct_count = len(merged_docs) == len(test_ids)
         result.add_check("returns correct count", correct_count,
-                        f"expected: {len(test_rids)}, got: {len(merged_docs)}")
+                        f"expected: {len(test_ids)}, got: {len(merged_docs)}")
 
         # Check last one is not_found
         last_doc = merged_docs[-1] if merged_docs else {}
         last_not_found = last_doc.get("status") == "not_found"
-        result.add_check("non-existent RID is not_found", last_not_found,
+        result.add_check("non-existent ID is not_found", last_not_found,
                         f"status: {last_doc.get('status')}")
 
         # Check others are success
         others_success = all(d.get("status") == "success" for d in merged_docs[:-1])
-        result.add_check("existing RIDs are success", others_success, "")
+        result.add_check("existing IDs are success", others_success, "")
 
     except Exception as e:
         result.error = str(e)
@@ -536,19 +545,20 @@ async def test_merged_document_structure():
             result.passed = False
             return result
 
-        test_rid = hits[0]["_source"].get("rid")
+        test_rid = hits[0]["_source"].get(UNIQUE_ID_FIELD)
 
         result.passed = True
 
         merged = await get_merged_document(
-            rid=test_rid,
+            unique_id=test_rid,
             opensearch_request=opensearch_request,
-            index_name=INDEX_NAME
+            index_name=INDEX_NAME,
+            unique_id_field=UNIQUE_ID_FIELD
         )
 
         # Check that SINGLE_VALUE_FIELDS are not lists
         for field in SINGLE_VALUE_FIELDS:
-            if field in merged and field != "rid":
+            if field in merged and field != UNIQUE_ID_FIELD:
                 value = merged[field]
                 is_not_list = not isinstance(value, list)
                 result.add_check(f"{field} is single value", is_not_list,
@@ -658,7 +668,7 @@ async def main():
 
         return failed == 0
 
-    r = await test_fetch_documents_by_rid()
+    r = await test_fetch_documents_by_id()
     results.append(r)
     print(r)
 
@@ -695,9 +705,10 @@ async def main():
     print(f"Success Rate: {passed/total*100:.1f}%")
 
     print(f"\nConfiguration:")
+    print(f"  UNIQUE_ID_FIELD: {UNIQUE_ID_FIELD}")
     print(f"  MERGE_FIELDS: {MERGE_FIELDS}")
     print(f"  SINGLE_VALUE_FIELDS: {SINGLE_VALUE_FIELDS}")
-    print(f"  MAX_DOCS_PER_RID: {MAX_DOCS_PER_RID}")
+    print(f"  MAX_DOCS_PER_ID: {MAX_DOCS_PER_ID}")
     print(f"  DEDUPLICATE_ARRAYS: {DEDUPLICATE_ARRAYS}")
 
     if failed > 0:

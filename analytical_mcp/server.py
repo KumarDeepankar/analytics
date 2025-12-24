@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Analytical MCP Server - Pure Analytics with Fuzzy Matching r
+Analytical MCP Server - Pure Analytics with Fuzzy Matching
 
 A FastMCP server that provides:
 - Keyword, integer, and date field filtering with fuzzy matching
@@ -22,6 +22,7 @@ from index_metadata import IndexMetadata
 from input_validator import InputValidator
 from text_search import text_search_with_filters
 from query_classifier import classify_search_text
+from document_merge import get_merged_document, get_merged_documents_batch, get_merge_config
 
 # Configure logging
 logging.basicConfig(
@@ -86,6 +87,9 @@ FIELD_CONTEXT_MAX_SAMPLES = int(os.getenv("FIELD_CONTEXT_MAX_SAMPLES", "5"))  # 
 
 # Samples per bucket configuration - sample docs returned inside each aggregation bucket
 SAMPLES_PER_BUCKET_DEFAULT = int(os.getenv("SAMPLES_PER_BUCKET_DEFAULT", "0"))  # 0 = disabled
+
+# Verbose data context - include index-wide stats in response
+VERBOSE_DATA_CONTEXT = os.getenv("VERBOSE_DATA_CONTEXT", "false").lower() == "true"
 
 # Field descriptions for agent context (can be overridden via FIELD_DESCRIPTIONS env var as JSON)
 DEFAULT_FIELD_DESCRIPTIONS = {
@@ -744,22 +748,40 @@ async def analyze_events(
         )
 
         if search_result["status"] == "success":
-            return ToolResult(content=[], structured_content={
-                "status": "success",
-                "mode": "search",
-                "data_context": {
+            # Merge documents for text search results
+            search_docs = search_result["documents"]
+            if search_docs:
+                rids = [doc.get(UNIQUE_ID_FIELD) for doc in search_docs if doc.get(UNIQUE_ID_FIELD)]
+                if rids:
+                    search_docs = await get_merged_documents_batch(
+                        rids=rids,
+                        opensearch_request=opensearch_request,
+                        index_name=INDEX_NAME,
+                        source_fields=RESULT_FIELDS
+                    )
+
+            # Build data context for text search
+            search_data_context = {
+                "unique_ids_matched": search_result["unique_hits"]
+            }
+            if VERBOSE_DATA_CONTEXT:
+                search_data_context.update({
                     "unique_id_field": UNIQUE_ID_FIELD,
                     "total_unique_ids_in_index": metadata.total_unique_ids,
                     "total_documents_in_index": metadata.total_documents,
                     "search_query": search_result["search_query"],
                     "search_terms": search_terms,
-                    "unique_ids_matched": search_result["unique_hits"],
                     "documents_matched": search_result["total_hits"],
                     "max_score": search_result["max_score"],
                     "fields_searched": search_result["fields_searched"],
                     "filters_applied": {f: v for f, v in parsed_filters.items() if any(f in c.get("term", {}) or f in c.get("range", {}) for c in filter_clauses)} if filter_clauses else {}
-                },
-                "documents": search_result["documents"],
+                })
+
+            return ToolResult(content=[], structured_content={
+                "status": "success",
+                "mode": "search",
+                "data_context": search_data_context,
+                "documents": search_docs,
                 "warnings": warnings,
                 "match_metadata": match_metadata
             })
@@ -938,31 +960,50 @@ async def analyze_events(
     total_unique_ids = aggs.get("unique_ids", {}).get("value", 0)
     total_matched = total_unique_ids if total_unique_ids > 0 else total_hits
 
-    # Data context
+    # Data context - minimal by default, verbose if VERBOSE_DATA_CONTEXT=true
     data_context = {
-        "index_name": INDEX_NAME,
-        "unique_id_field": UNIQUE_ID_FIELD,
-        "total_unique_ids_in_index": metadata.total_unique_ids,
-        "total_documents_in_index": metadata.total_documents,
-        "unique_ids_matched": total_matched,
-        "documents_matched": total_hits,  # Keep raw doc count for reference
-        "match_percentage": round(
-            (total_matched / metadata.total_unique_ids * 100)
-            if metadata.total_unique_ids > 0 else 0,
-            2
-        ),
-        "date_range": {
-            field: {
-                "min": metadata.date_ranges.get(field).min if metadata.date_ranges.get(field) else None,
-                "max": metadata.date_ranges.get(field).max if metadata.date_ranges.get(field) else None
-            }
-            for field in DATE_FIELDS
-        }
+        "unique_ids_matched": total_matched
     }
+
+    if VERBOSE_DATA_CONTEXT:
+        data_context.update({
+            "index_name": INDEX_NAME,
+            "unique_id_field": UNIQUE_ID_FIELD,
+            "total_unique_ids_in_index": metadata.total_unique_ids,
+            "total_documents_in_index": metadata.total_documents,
+            "documents_matched": total_hits,
+            "match_percentage": round(
+                (total_matched / metadata.total_unique_ids * 100)
+                if metadata.total_unique_ids > 0 else 0,
+                2
+            ),
+            "date_range": {
+                field: {
+                    "min": metadata.date_ranges.get(field).min if metadata.date_ranges.get(field) else None,
+                    "max": metadata.date_ranges.get(field).max if metadata.date_ranges.get(field) else None
+                }
+                for field in DATE_FIELDS
+            }
+        })
 
     # Extract documents from response
     hits = data.get("hits", {}).get("hits", [])
-    documents = [h["_source"] for h in hits]
+    collapsed_documents = [h["_source"] for h in hits]
+
+    # Merge all documents per RID (combines duplicates into single document)
+    if collapsed_documents:
+        rids = [doc.get(UNIQUE_ID_FIELD) for doc in collapsed_documents if doc.get(UNIQUE_ID_FIELD)]
+        if rids:
+            documents = await get_merged_documents_batch(
+                rids=rids,
+                opensearch_request=opensearch_request,
+                index_name=INDEX_NAME,
+                source_fields=RESULT_FIELDS
+            )
+        else:
+            documents = collapsed_documents
+    else:
+        documents = []
 
     # Aggregation results
     aggregations: Dict[str, Any] = {}

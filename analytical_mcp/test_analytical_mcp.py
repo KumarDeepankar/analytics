@@ -5,8 +5,12 @@ Tests all query capabilities and edge cases.
 """
 import asyncio
 import json
+import os
 import sys
 from typing import Any, Dict, List, Optional
+
+# Enable verbose data context for tests
+os.environ["VERBOSE_DATA_CONTEXT"] = "true"
 
 # Add parent directory to path for imports
 sys.path.insert(0, '/Users/deepankar/Documents/analytics/analytical_mcp')

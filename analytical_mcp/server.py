@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Analytical MCP Server - Pure Analytics with Fuzzy Matching
+Analytical MCP Server - Pure Analytics with Fuzzy Matching r
 
 A FastMCP server that provides:
 - Keyword, integer, and date field filtering with fuzzy matching

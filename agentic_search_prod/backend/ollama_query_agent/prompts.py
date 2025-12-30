@@ -3,7 +3,7 @@ import json
 
 
 def format_conversation_context(conversation_history: List[Dict[str, Any]], max_turns: int = 3) -> str:
-    """Format conversation history as explicit Question/Answer pairs for better LLM comprehension"""
+    """Format conversation history with Question, Tool Queries, and Answer for better LLM comprehension"""
     if not conversation_history:
         return ""
 
@@ -13,9 +13,22 @@ def format_conversation_context(conversation_history: List[Dict[str, Any]], max_
     for i, turn in enumerate(recent, 1):
         query = turn.get('query', '')
         response = turn.get('response', '')
+        tool_queries = turn.get('tool_queries', [])
 
-        # Format as explicit Question/Answer for clarity
-        context_parts.append(f"### Turn {i}\n**Question:** {query}\n**Answer:** {response}")
+        # Format tool queries if available
+        tool_queries_str = ""
+        if tool_queries:
+            tool_lines = []
+            for tq in tool_queries:
+                tool_name = tq.get('tool', 'unknown')
+                args = tq.get('arguments', {})
+                # Format arguments as key=value pairs
+                args_str = ", ".join([f"{k}={repr(v)}" for k, v in args.items()])
+                tool_lines.append(f"  - `{tool_name}({args_str})`")
+            tool_queries_str = "\n**Tool Queries Used:**\n" + "\n".join(tool_lines)
+
+        # Format as explicit Question/Tool Queries/Answer for clarity
+        context_parts.append(f"### Turn {i}\n**Question:** {query}{tool_queries_str}\n**Answer:** {response}")
 
     context_md = "\n\n".join(context_parts)
 
@@ -42,19 +55,26 @@ def create_multi_task_planning_prompt(
 # Follow-up Query Instructions
 
 This is a FOLLOW-UP query. You MUST:
-1. **Interpret the current query using previous conversation context**
+1. **Look at the PREVIOUS TOOL QUERIES** shown in conversation history
+   - These show the EXACT queries/arguments used in the last turn
+   - Use them as the BASE for your new tool arguments
+   - Modify them according to the user's new request
+
+2. **Interpret the current query using previous conversation context**
    - Resolve pronouns: "it", "that", "they", "this" → refer to entities from previous turns
    - Resolve references: "more details", "last year", "compare with" → use context from previous answers
    - Combine topics: If user asks "what about X?" → X relates to the previous topic
 
-2. **Form complete tool arguments by merging context + current query**
-   - Example: Previous query was about "climate events in California"
-   - Current query: "what about last year?"
-   - Tool argument should be: "climate events in California last year" (NOT just "last year")
+3. **Form complete tool arguments by MODIFYING previous tool queries**
+   - Example: Previous tool query was `search_events(query='climate events in California', size=10)`
+   - Current user query: "what about last year?"
+   - New tool argument should be: `search_events(query='climate events in California last year', size=10)`
+   - KEEP the same filters/parameters from previous query, only modify what user requested
 
-3. **Maintain conversation continuity**
+4. **Maintain conversation continuity**
    - Build upon previous answers, don't start from scratch
    - If user asks for clarification, use the same entities/filters from before
+   - Preserve relevant filters (date ranges, locations, categories) unless user explicitly changes them
 
 """
 

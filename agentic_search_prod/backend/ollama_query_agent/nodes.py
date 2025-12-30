@@ -51,12 +51,24 @@ def strip_html_to_text(html_content: str) -> str:
 
 
 def save_conversation_turn(state: SearchAgentState, response: str) -> None:
-    """Save a conversation turn to history - only user query and plain text response"""
+    """Save a conversation turn to history - user query, tool queries, and plain text response"""
     # Convert HTML response to plain text for storage
     plain_text_response = strip_html_to_text(response)
 
+    # Extract tool queries from execution plan (if available)
+    tool_queries = []
+    execution_plan = state.get("execution_plan")
+    if execution_plan and execution_plan.tasks:
+        for task in execution_plan.tasks:
+            if task.status == "completed":
+                tool_queries.append({
+                    "tool": task.tool_name,
+                    "arguments": task.tool_arguments
+                })
+
     new_turn = {
         "query": state["input"],
+        "tool_queries": tool_queries,  # Store the actual tool queries formed
         "response": plain_text_response
     }
 

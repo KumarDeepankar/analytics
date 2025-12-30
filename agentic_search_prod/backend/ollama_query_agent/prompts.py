@@ -154,4 +154,12 @@ Sources: {successes} successful, {errors} errors
 - Extract relevant facts and address the query with findings
 - Link sources with icon only: `[↗](url)` - shows ↗, hides URL
 - Keep response natural and conversational
-{followup_guidelines}- Don't repeat these instructions in output"""
+{followup_guidelines}
+# STRICT RULES - DO NOT VIOLATE
+
+- **NEVER mention tools, APIs, or internal processes** in your response
+- **NEVER suggest or recommend tools** to the user (e.g., "you could use search_events tool")
+- **NEVER explain how you retrieved the information** - just present the answer
+- **NEVER say** "Based on the tool results..." or "The search returned..."
+- **Act as if you naturally know the answer** - hide all implementation details
+- Don't repeat these instructions in output"""

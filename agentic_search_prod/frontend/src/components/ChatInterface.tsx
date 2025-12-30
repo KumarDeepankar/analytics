@@ -1,7 +1,6 @@
-import { useState, useEffect, useRef, useMemo } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { MessageList } from './MessageList';
 import { InputArea } from './InputArea';
-import { RightSidebar } from './RightSidebar';
 import { useTheme } from '../contexts/ThemeContext';
 import { useChatContext } from '../contexts/ChatContext';
 import { apiClient } from '../services/api';
@@ -28,23 +27,6 @@ export function ChatInterface() {
   const [showToolsDropdown, setShowToolsDropdown] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const toolsDropdownRef = useRef<HTMLDivElement>(null);
-
-  // Check if there are sources or charts to show
-  const hasSources = useMemo(() => {
-    // Check all assistant messages to see if any have sources or charts
-    const assistantMessages = state.messages.filter((m) => m.type === 'assistant');
-
-    for (const message of assistantMessages) {
-      const sources = message.sources;
-      const charts = message.charts;
-      // Only return true if sources/charts exist AND have length > 0
-      if ((sources && sources.length > 0) || (charts && charts.length > 0)) {
-        return true;
-      }
-    }
-
-    return false;
-  }, [state.messages]);
 
   // Close model dropdown when clicking outside
   useEffect(() => {
@@ -794,13 +776,18 @@ export function ChatInterface() {
 
       {/* Main content area with margins */}
       <div
+        id="main-scroll-container"
+        className="main-scroll-container"
         style={{
           flex: 1,
           display: 'flex',
           justifyContent: 'center',
           position: 'relative',
           marginLeft: '64px',
-          marginRight: '280px',
+          marginRight: '180px',
+          height: 'calc(100vh - 80px)',
+          overflowY: 'auto',
+          paddingBottom: '0px',
         }}
       >
         <div
@@ -810,11 +797,9 @@ export function ChatInterface() {
             width: '100%',
             maxWidth: '1200px',
             paddingLeft: '96px',
-            paddingRight: '0px',
+            paddingRight: '96px',
             paddingTop: '0px',
-            paddingBottom: '80px',
-            transform: hasSources ? 'translateX(-72px)' : 'translateX(0)', // Shift container left when sources appear
-            transition: 'none',
+            paddingBottom: '20px',
           }}
         >
         {/* Center content for first search only */}
@@ -835,7 +820,7 @@ export function ChatInterface() {
           position: 'fixed',
           bottom: '8px',
           left: '64px',
-          right: '280px',
+          right: '180px',
           display: 'flex',
           justifyContent: 'center',
           pointerEvents: 'none',
@@ -845,9 +830,7 @@ export function ChatInterface() {
             width: '100%',
             maxWidth: '1200px',
             paddingLeft: '96px',
-            paddingRight: '0px',
-            transform: hasSources ? 'translateX(-72px)' : 'translateX(0)',
-            transition: 'none',
+            paddingRight: '96px',
             pointerEvents: 'auto',
           }}>
             <InputArea />
@@ -855,55 +838,34 @@ export function ChatInterface() {
         </div>
       </div>
 
-      {/* Right section - User info (always) and Sources (conditional) */}
+      {/* User info - fixed top right */}
       <div
-        className="right-sidebar-scroll"
         style={{
           position: 'fixed',
-          right: 0,
-          top: 0,
-          bottom: 0,
-          width: '280px',
-          backgroundColor: 'transparent',
-          display: 'flex',
-          flexDirection: 'column',
-          paddingRight: '16px',
-          overflowY: 'auto',
+          right: '48px',
+          top: '16px',
+          textAlign: 'right',
           zIndex: 50,
         }}
       >
-        {/* User Info - Always visible */}
         <div
           style={{
-            padding: '16px 16px 8px 16px',
-            textAlign: 'center',
+            fontSize: '11px',
+            fontWeight: '500',
+            color: themeColors.text,
+            marginBottom: '2px',
           }}
         >
-          <div
-            style={{
-              fontSize: '11px',
-              fontWeight: '500',
-              color: themeColors.text,
-              marginBottom: '2px',
-            }}
-          >
-            {state.user?.name || 'Loading...'}
-          </div>
-          <div
-            style={{
-              fontSize: '9px',
-              color: themeColors.textSecondary,
-            }}
-          >
-            {state.user?.email || ''}
-          </div>
+          {state.user?.name || 'Loading...'}
         </div>
-
-        {/* Spacer to push sources lower */}
-        <div style={{ height: '80px' }}></div>
-
-        {/* Sources Section - Only show when sources available */}
-        {hasSources && <RightSidebar />}
+        <div
+          style={{
+            fontSize: '9px',
+            color: themeColors.textSecondary,
+          }}
+        >
+          {state.user?.email || ''}
+        </div>
       </div>
     </div>
   );

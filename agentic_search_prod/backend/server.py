@@ -317,6 +317,7 @@ async def search_interaction_stream(
 
                         # Send conversation state to frontend (after initialization node)
                         if event_name == "parallel_initialization_node":
+                            import json as json_lib  # Local import to avoid scope issues
                             is_reset = node_output.get("conversation_was_reset", False)
                             is_followup = node_output.get("is_followup_query", False)
                             history_len = len(node_output.get("conversation_history", []))
@@ -328,7 +329,7 @@ async def search_interaction_stream(
                                 "turn_count": history_len,
                                 "followup_allowed": history_len < 1  # MAX_FOLLOWUP_TURNS = 1
                             }
-                            yield f"TURN_INFO:{json.dumps(turn_info)}\n"
+                            yield f"TURN_INFO:{json_lib.dumps(turn_info)}\n"
                             await asyncio.sleep(0.01)
 
                         # Send extracted sources after task execution nodes complete

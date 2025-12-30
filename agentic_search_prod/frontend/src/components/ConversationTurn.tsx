@@ -17,8 +17,8 @@ interface ConversationTurnProps {
  */
 export const ConversationTurn = memo(({ userMessage, assistantMessage, isLatest }: ConversationTurnProps) => {
   const { themeColors } = useTheme();
-  // Default to showing thinking streams, false = visualization
-  const [showAgentThinking, setShowAgentThinking] = useState(true);
+  // Tab state: 'thinking' | 'visualization' | 'sources'
+  const [activeTab, setActiveTab] = useState<'thinking' | 'visualization' | 'sources'>('thinking');
 
   return (
     <div
@@ -34,7 +34,8 @@ export const ConversationTurn = memo(({ userMessage, assistantMessage, isLatest 
       }}
     >
       {/* Turn indicator */}
-      {/* Tab Navigation above user message - Answer label + 2 tabs to control middle area */}
+      {/* Tab Navigation above user message - Answer label + tabs to control middle area */}
+      {/* Only make tabs sticky for the latest turn to avoid overlap */}
       <div
         style={{
           display: 'flex',
@@ -42,7 +43,15 @@ export const ConversationTurn = memo(({ userMessage, assistantMessage, isLatest 
           marginBottom: '8px',
           borderBottom: `1px solid ${themeColors.border}`,
           alignItems: 'flex-end',
-          position: 'relative',
+          position: isLatest ? 'sticky' : 'relative',
+          top: isLatest ? 0 : 'auto',
+          zIndex: isLatest ? 10 : 1,
+          backgroundColor: themeColors.background,
+          paddingTop: '12px',
+          marginLeft: '-20px',
+          marginRight: '-20px',
+          paddingLeft: '20px',
+          paddingRight: '20px',
         }}
       >
         {/* Answer - Always visible indicator (not a tab) */}
@@ -72,14 +81,14 @@ export const ConversationTurn = memo(({ userMessage, assistantMessage, isLatest 
 
         {/* Interactive tabs */}
         <button
-          onClick={() => setShowAgentThinking(true)}
+          onClick={() => setActiveTab('thinking')}
           style={{
             padding: '6px 12px',
             paddingBottom: '5px',
             backgroundColor: 'transparent',
-            color: showAgentThinking ? themeColors.primary : themeColors.textSecondary,
+            color: activeTab === 'thinking' ? themeColors.primary : themeColors.textSecondary,
             border: 'none',
-            borderBottom: showAgentThinking ? `2px solid ${themeColors.primary}` : '2px solid transparent',
+            borderBottom: activeTab === 'thinking' ? `2px solid ${themeColors.primary}` : '2px solid transparent',
             marginBottom: '-1px',
             cursor: 'pointer',
             fontSize: '12px',
@@ -90,14 +99,14 @@ export const ConversationTurn = memo(({ userMessage, assistantMessage, isLatest 
           Agent Thinking
         </button>
         <button
-          onClick={() => setShowAgentThinking(false)}
+          onClick={() => setActiveTab('visualization')}
           style={{
             padding: '6px 12px',
             paddingBottom: '5px',
             backgroundColor: 'transparent',
-            color: !showAgentThinking ? themeColors.primary : themeColors.textSecondary,
+            color: activeTab === 'visualization' ? themeColors.primary : themeColors.textSecondary,
             border: 'none',
-            borderBottom: !showAgentThinking ? `2px solid ${themeColors.primary}` : '2px solid transparent',
+            borderBottom: activeTab === 'visualization' ? `2px solid ${themeColors.primary}` : '2px solid transparent',
             marginBottom: '-1px',
             cursor: 'pointer',
             fontSize: '12px',
@@ -106,6 +115,24 @@ export const ConversationTurn = memo(({ userMessage, assistantMessage, isLatest 
           }}
         >
           Visualization
+        </button>
+        <button
+          onClick={() => setActiveTab('sources')}
+          style={{
+            padding: '6px 12px',
+            paddingBottom: '5px',
+            backgroundColor: 'transparent',
+            color: activeTab === 'sources' ? themeColors.primary : themeColors.textSecondary,
+            border: 'none',
+            borderBottom: activeTab === 'sources' ? `2px solid ${themeColors.primary}` : '2px solid transparent',
+            marginBottom: '-1px',
+            cursor: 'pointer',
+            fontSize: '12px',
+            fontWeight: '600',
+            transition: 'all 0.2s ease',
+          }}
+        >
+          Sources
         </button>
 
         {/* Previous Conversation tag - positioned on the right */}
@@ -138,7 +165,7 @@ export const ConversationTurn = memo(({ userMessage, assistantMessage, isLatest 
       {/* Middle area controlled by tabs - between user message and assistant reply */}
       <div style={{ marginBottom: '12px' }}>
         {/* Show Agent Thinking - Processing steps */}
-        {showAgentThinking && (
+        {activeTab === 'thinking' && (
           <div>
             {assistantMessage.processingSteps && assistantMessage.processingSteps.length > 0 && (
               <ProcessingChain steps={assistantMessage.processingSteps} />
@@ -147,7 +174,7 @@ export const ConversationTurn = memo(({ userMessage, assistantMessage, isLatest 
         )}
 
         {/* Show Visualization - Charts horizontally scrollable */}
-        {!showAgentThinking && (
+        {activeTab === 'visualization' && (
           <div>
             {assistantMessage.charts && assistantMessage.charts.length > 0 && (
               <div>
@@ -203,6 +230,89 @@ export const ConversationTurn = memo(({ userMessage, assistantMessage, isLatest 
                     </div>
                   ))}
                 </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Show Sources */}
+        {activeTab === 'sources' && (
+          <div>
+            {assistantMessage.sources && assistantMessage.sources.length > 0 ? (
+              <div>
+                {/* Header matching Agent Thinking style */}
+                <div style={{
+                  color: themeColors.textSecondary,
+                  fontSize: '10px',
+                  fontWeight: '600',
+                  textTransform: 'uppercase',
+                  letterSpacing: '0.5px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '5px',
+                  marginBottom: '8px',
+                }}>
+                  <span>Sources</span>
+                  <span style={{
+                    color: themeColors.textSecondary,
+                    fontSize: '9px',
+                    fontStyle: 'italic',
+                    fontWeight: 'normal',
+                  }}>
+                    {assistantMessage.sources.length}
+                  </span>
+                </div>
+
+                {/* Sources list */}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                  {assistantMessage.sources.map((source, index) => (
+                    <a
+                      key={source.url}
+                      href={source.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      style={{
+                        textDecoration: 'none',
+                        backgroundColor: themeColors.surface,
+                        padding: '12px',
+                        borderRadius: '8px',
+                        border: `1px solid ${themeColors.border}`,
+                        transition: 'all 0.2s ease',
+                        cursor: 'pointer',
+                      }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.backgroundColor = `${themeColors.accent}10`;
+                        e.currentTarget.style.borderColor = themeColors.accent;
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.backgroundColor = themeColors.surface;
+                        e.currentTarget.style.borderColor = themeColors.border;
+                      }}
+                    >
+                      <div style={{ color: themeColors.accent, fontSize: '13px', fontWeight: '600', marginBottom: '4px' }}>
+                        {source.title}
+                      </div>
+                      {source.snippet && (
+                        <div style={{ color: themeColors.textSecondary, fontSize: '12px', lineHeight: '1.5', marginBottom: '4px' }}>
+                          {source.snippet}
+                        </div>
+                      )}
+                      <div style={{ color: themeColors.textSecondary, fontSize: '11px', opacity: '0.7' }}>
+                        {new URL(source.url).hostname}
+                      </div>
+                    </a>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <div style={{
+                color: themeColors.textSecondary,
+                fontSize: '12px',
+                fontStyle: 'italic',
+                padding: '16px',
+                textAlign: 'center',
+              }}>
+                No sources available for this response
               </div>
             )}
           </div>

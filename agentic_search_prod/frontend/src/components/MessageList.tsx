@@ -1,4 +1,4 @@
-import { useRef, useEffect, useState } from 'react';
+import { useRef, useEffect, useLayoutEffect } from 'react';
 import { useWindowVirtualizer } from '@tanstack/react-virtual';
 import { useChatContext } from '../contexts/ChatContext';
 import { Message } from './Message';
@@ -7,14 +7,12 @@ import { useTheme } from '../contexts/ThemeContext';
 import type { Message as MessageType } from '../types';
 
 /**
- * Virtualized message list for smooth scrolling
+ * Message list component
  */
 export function MessageList() {
   const { state } = useChatContext();
   const { themeColors } = useTheme();
   const scrollContainerRef = useRef<HTMLDivElement>(null);
-  const latestTurnRef = useRef<HTMLDivElement>(null);
-  const [showOlderMessages, setShowOlderMessages] = useState(false);
 
   // Group messages into conversation turns (user + assistant pairs)
   const conversationTurns: Array<{ user: MessageType; assistant: MessageType }> = [];
@@ -26,54 +24,41 @@ export function MessageList() {
     }
   }
 
-  // Auto-scroll to latest message when a new one arrives
-  useEffect(() => {
-    if (latestTurnRef.current && conversationTurns.length > 0) {
-      // Longer delay to ensure smooth render
-      setTimeout(() => {
-        if (latestTurnRef.current) {
-          // Get the absolute position of the marker element
-          const rect = latestTurnRef.current.getBoundingClientRect();
-          const absoluteTop = window.pageYOffset + rect.top;
+  // Auto-scroll to push older turn out of view when follow-up is added
+  // Using useLayoutEffect to scroll before browser paints
+  useLayoutEffect(() => {
+    if (conversationTurns.length > 1) {
+      const scrollContainer = document.getElementById('main-scroll-container');
+      const latestTurn = document.getElementById('latest-turn');
 
-          // Use requestAnimationFrame for smoother scroll timing
-          requestAnimationFrame(() => {
-            window.scrollTo({
-              top: absoluteTop,
-              behavior: 'smooth'
-            });
-          });
+      if (scrollContainer && latestTurn) {
+        const containerRect = scrollContainer.getBoundingClientRect();
+        const turnRect = latestTurn.getBoundingClientRect();
+        const targetScroll = scrollContainer.scrollTop + (turnRect.top - containerRect.top);
+        scrollContainer.scrollTop = targetScroll;
+      }
+    }
+  });
+
+  // Also scroll on conversationTurns change with useEffect as backup
+  useEffect(() => {
+    if (conversationTurns.length > 1) {
+      const scrollToLatest = () => {
+        const scrollContainer = document.getElementById('main-scroll-container');
+        const latestTurn = document.getElementById('latest-turn');
+
+        if (scrollContainer && latestTurn) {
+          const containerRect = scrollContainer.getBoundingClientRect();
+          const turnRect = latestTurn.getBoundingClientRect();
+          const targetScroll = scrollContainer.scrollTop + (turnRect.top - containerRect.top);
+          scrollContainer.scrollTop = targetScroll;
         }
-      }, 100);
+      };
+
+      scrollToLatest();
+      setTimeout(scrollToLatest, 100);
     }
   }, [conversationTurns.length]);
-
-  // Show older messages when user scrolls up
-  useEffect(() => {
-    let lastScrollY = window.scrollY;
-    let ticking = false;
-
-    const handleScroll = () => {
-      const currentScrollY = window.scrollY;
-
-      if (!ticking) {
-        requestAnimationFrame(() => {
-          // If scrolling up, show older messages
-          if (currentScrollY < lastScrollY && currentScrollY > 0) {
-            setShowOlderMessages(true);
-          }
-
-          lastScrollY = currentScrollY;
-          ticking = false;
-        });
-
-        ticking = true;
-      }
-    };
-
-    window.addEventListener('scroll', handleScroll, { passive: true });
-    return () => window.removeEventListener('scroll', handleScroll);
-  }, []);
 
   // Virtualizer for performance (only if many messages)
   const virtualizer = useWindowVirtualizer({
@@ -146,53 +131,30 @@ export function MessageList() {
       ) : (
         <div style={{
           padding: '8px 24px 24px 24px',
-          willChange: 'transform',
-          transform: 'translateZ(0)',
-          contain: 'layout style paint',
         }}>
+          {/* Original order - older turns first, latest at bottom */}
+          {/* Auto-scroll positions latest at top of viewport, older turns above (scroll up) */}
           {conversationTurns.map((turn, index) => {
             const isLatestTurn = index === conversationTurns.length - 1;
-            const isOlderTurn = !isLatestTurn;
-
-            // Show all turns when scrolled up, or only latest when not
-            if (isOlderTurn && !showOlderMessages) {
-              return null;
-            }
 
             return (
               <div
                 key={turn.user.id}
-                style={{
-                  opacity: isOlderTurn ? (showOlderMessages ? 1 : 0) : 1,
-                  transition: isOlderTurn ? 'opacity 0.3s ease-out' : 'none',
-                  willChange: isOlderTurn ? 'opacity' : 'auto',
-                }}
+                id={isLatestTurn ? "latest-turn" : undefined}
+                data-latest-turn={isLatestTurn ? "true" : "false"}
               >
-                {/* Scroll marker before latest turn */}
-                {isLatestTurn && (
-                  <div
-                    ref={latestTurnRef}
-                    style={{
-                      height: '0px',
-                      width: '100%',
-                      visibility: 'hidden'
-                    }}
-                  />
-                )}
-
                 <ConversationTurn
                   userMessage={turn.user}
                   assistantMessage={turn.assistant}
                   isLatest={isLatestTurn}
                 />
-
-                {/* Add spacer BELOW latest turn for whitespace */}
-                {isLatestTurn && (
-                  <div style={{ height: 'calc(100vh - 200px)' }} />
-                )}
               </div>
             );
           })}
+          {/* Add spacer at end to allow scrolling latest turn to top */}
+          {conversationTurns.length > 1 && (
+            <div style={{ height: 'calc(100vh - 200px)', flexShrink: 0 }} />
+          )}
         </div>
       )}
     </div>

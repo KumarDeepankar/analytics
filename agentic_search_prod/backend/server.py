@@ -315,6 +315,22 @@ async def search_interaction_stream(
                             yield f"THINKING:✓ Completed: {event_name.replace('_', ' ').title()}\n"
                             await asyncio.sleep(0.01)
 
+                        # Send conversation state to frontend (after initialization node)
+                        if event_name == "parallel_initialization_node":
+                            is_reset = node_output.get("conversation_was_reset", False)
+                            is_followup = node_output.get("is_followup_query", False)
+                            history_len = len(node_output.get("conversation_history", []))
+
+                            # Send turn info so frontend can update UI
+                            turn_info = {
+                                "is_reset": is_reset,
+                                "is_followup": is_followup,
+                                "turn_count": history_len,
+                                "followup_allowed": history_len < 1  # MAX_FOLLOWUP_TURNS = 1
+                            }
+                            yield f"TURN_INFO:{json.dumps(turn_info)}\n"
+                            await asyncio.sleep(0.01)
+
                         # Send extracted sources after task execution nodes complete
                         if event_name in ["execute_all_tasks_parallel_node", "execute_task_node"]:
                             extracted_sources = node_output.get("extracted_sources", [])

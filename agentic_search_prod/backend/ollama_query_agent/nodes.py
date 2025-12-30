@@ -75,12 +75,7 @@ def save_conversation_turn(state: SearchAgentState, response: str) -> None:
     if "conversation_history" not in state:
         state["conversation_history"] = []
 
-    # Auto-reset: If we already have 2 turns, clear history to start fresh
-    # This effectively limits conversation to 2-turn context window
-    if len(state["conversation_history"]) >= 2:
-        state["conversation_history"] = []
-        state["conversation_was_reset"] = True  # Flag to notify user on next query
-
+    # Simply append the turn - reset logic is now handled in parallel_initialization_node
     state["conversation_history"].append(new_turn)
 
 
@@ -250,6 +245,21 @@ async def parallel_initialization_node(state: SearchAgentState) -> SearchAgentSt
 
     async def init_task():
         """Initialize search state"""
+        # Get conversation history and check if reset is needed
+        conversation_history = state.get("conversation_history", [])
+        conversation_was_reset = False
+
+        # AUTO-RESET: If we have 1 or more turns, reset for fresh conversation
+        # This allows only 1 follow-up query per conversation cycle
+        # Change >= 1 to >= 2 if you want to allow 2 follow-ups, etc.
+        MAX_FOLLOWUP_TURNS = 1  # Number of follow-up turns allowed
+        if len(conversation_history) > MAX_FOLLOWUP_TURNS:
+            conversation_history = []
+            conversation_was_reset = True
+
+        # Determine if this is a follow-up query
+        is_followup = len(conversation_history) > 0 and not conversation_was_reset
+
         # Initialize state with new multi-task structure
         init_state = {
             "thinking_steps": [],
@@ -261,8 +271,9 @@ async def parallel_initialization_node(state: SearchAgentState) -> SearchAgentSt
             "error_message": None,
             "current_turn_iteration_count": 0,
             "max_turn_iterations": 1,
-            "conversation_history": state.get("conversation_history", []),
-            "is_followup_query": state.get("is_followup_query", False),
+            "conversation_history": conversation_history,
+            "is_followup_query": is_followup,
+            "conversation_was_reset": conversation_was_reset,
             # Clear sources and chart configs for each new query (prevent accumulation)
             "extracted_sources": [],
             "chart_configs": []
@@ -287,18 +298,15 @@ async def parallel_initialization_node(state: SearchAgentState) -> SearchAgentSt
             f"Query: '{state['input']}'",
         ]
 
-        if init_state["is_followup_query"]:
+        if conversation_was_reset:
+            init_steps.append(f"🔄 New conversation started ({MAX_FOLLOWUP_TURNS} follow-up limit reached)")
+        elif is_followup:
             init_steps.append("Followup query detected - loading conversation context")
-            if init_state["conversation_history"]:
-                init_steps.append(f"Found {len(init_state['conversation_history'])} previous conversation turns")
-                if init_state["conversation_history"]:
-                    latest = init_state["conversation_history"][-1]
-                    preview = latest.get("response", "")
-                    init_steps.append(f"💭 Previous context: {preview}")
-        elif state.get("conversation_was_reset"):
-            init_steps.append("🔄 New conversation started (2-turn limit reached)")
-            # Clear the flag after showing the message
-            init_state["conversation_was_reset"] = False
+            if conversation_history:
+                init_steps.append(f"Found {len(conversation_history)} previous conversation turn(s)")
+                latest = conversation_history[-1]
+                prev_query = latest.get("query", "")
+                init_steps.append(f"💭 Previous query: {prev_query}")
         else:
             init_steps.append("🆕 Fresh search session started")
 

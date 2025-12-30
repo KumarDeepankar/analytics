@@ -22,7 +22,7 @@ from index_metadata import IndexMetadata
 from input_validator import InputValidator
 from text_search import text_search_with_filters
 from query_classifier import classify_search_text
-from document_merge import get_merged_document, get_merged_documents_batch, get_merge_config
+from document_merge import get_merged_documents_batch
 
 # Configure logging
 logging.basicConfig(
@@ -1320,13 +1320,9 @@ def build_dynamic_field_context() -> str:
         else:
             lines.append(f"  {field}: {range_str}")
 
-    # Total documents and unique IDs
+    # Unique ID field info
     lines.append(f"\nUnique ID field: {UNIQUE_ID_FIELD}")
     lines.append(f"Total unique IDs in index: {metadata.total_unique_ids}")
-    lines.append(f"Total documents in index: {metadata.total_documents}")
-    if metadata.total_documents > metadata.total_unique_ids:
-        dup_rate = round((1 - metadata.total_unique_ids / metadata.total_documents) * 100, 1)
-        lines.append(f"Note: {dup_rate}% duplicate ID rate - counts use unique IDs for accuracy")
 
     return '\n'.join(lines)
 

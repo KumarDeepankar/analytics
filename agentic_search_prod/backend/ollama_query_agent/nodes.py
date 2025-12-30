@@ -62,8 +62,14 @@ def save_conversation_turn(state: SearchAgentState, response: str) -> None:
 
     if "conversation_history" not in state:
         state["conversation_history"] = []
+
+    # Auto-reset: If we already have 2 turns, clear history to start fresh
+    # This effectively limits conversation to 2-turn context window
+    if len(state["conversation_history"]) >= 2:
+        state["conversation_history"] = []
+        state["conversation_was_reset"] = True  # Flag to notify user on next query
+
     state["conversation_history"].append(new_turn)
-    state["conversation_history"] = state["conversation_history"][-10:]  # Keep last 10 turns
 
 
 def format_simple_results(task_results: List[Dict[str, Any]]) -> str:
@@ -277,6 +283,10 @@ async def parallel_initialization_node(state: SearchAgentState) -> SearchAgentSt
                     latest = init_state["conversation_history"][-1]
                     preview = latest.get("response", "")
                     init_steps.append(f"💭 Previous context: {preview}")
+        elif state.get("conversation_was_reset"):
+            init_steps.append("🔄 New conversation started (2-turn limit reached)")
+            # Clear the flag after showing the message
+            init_state["conversation_was_reset"] = False
         else:
             init_steps.append("🆕 Fresh search session started")
 

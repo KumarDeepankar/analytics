@@ -35,6 +35,29 @@ def create_multi_task_planning_prompt(
 
     context = format_conversation_context(conversation_history, max_turns=2) if conversation_history else ""
 
+    # Add follow-up query instructions when there's conversation history
+    followup_instructions = ""
+    if conversation_history:
+        followup_instructions = """
+# Follow-up Query Instructions
+
+This is a FOLLOW-UP query. You MUST:
+1. **Interpret the current query using previous conversation context**
+   - Resolve pronouns: "it", "that", "they", "this" → refer to entities from previous turns
+   - Resolve references: "more details", "last year", "compare with" → use context from previous answers
+   - Combine topics: If user asks "what about X?" → X relates to the previous topic
+
+2. **Form complete tool arguments by merging context + current query**
+   - Example: Previous query was about "climate events in California"
+   - Current query: "what about last year?"
+   - Tool argument should be: "climate events in California last year" (NOT just "last year")
+
+3. **Maintain conversation continuity**
+   - Build upon previous answers, don't start from scratch
+   - If user asks for clarification, use the same entities/filters from before
+
+"""
+
     # Format tools as Markdown (docstring is already MD, just render it properly)
     tools_md_parts = []
     for t in enabled_tools:
@@ -49,7 +72,7 @@ def create_multi_task_planning_prompt(
 {tools_md}
 
 ---
-
+{followup_instructions}
 # Query
 
 {user_query}
@@ -109,6 +132,12 @@ def create_information_synthesis_prompt(
     successes = len([r for r in results if 'error' not in str(r.get('result', {}))])
     errors = len(results) - successes
 
+    # Add follow-up context instructions
+    followup_guidelines = ""
+    if conversation_history:
+        followup_guidelines = """- **Follow-up context**: This is a continuation of previous conversation. Reference previous answers where relevant and build upon them.
+"""
+
     return f"""# Query
 
 {user_query}
@@ -125,4 +154,4 @@ Sources: {successes} successful, {errors} errors
 - Extract relevant facts and address the query with findings
 - Link sources with icon only: `[↗](url)` - shows ↗, hides URL
 - Keep response natural and conversational
-- Don't repeat these instructions in output"""
+{followup_guidelines}- Don't repeat these instructions in output"""

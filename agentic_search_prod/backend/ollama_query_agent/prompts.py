@@ -51,30 +51,65 @@ def create_multi_task_planning_prompt(
     # Add follow-up query instructions when there's conversation history
     followup_instructions = ""
     if conversation_history:
-        followup_instructions = """
-# Follow-up Query Instructions
+        # Extract previous tool queries for explicit reference
+        prev_tool_queries_example = ""
+        if conversation_history:
+            last_turn = conversation_history[-1]
+            tool_queries = last_turn.get('tool_queries', [])
+            if tool_queries:
+                tq = tool_queries[0]  # Get first tool query as example
+                tool_name = tq.get('tool', '')
+                args = tq.get('arguments', {})
+                args_str = ", ".join([f"{k}={repr(v)}" for k, v in args.items()])
+                prev_tool_queries_example = f"`{tool_name}({args_str})`"
 
-This is a FOLLOW-UP query. You MUST:
-1. **Look at the PREVIOUS TOOL QUERIES** shown in conversation history
-   - These show the EXACT queries/arguments used in the last turn
-   - Use them as the BASE for your new tool arguments
-   - Modify them according to the user's new request
+        followup_instructions = f"""
+# ⚠️ CRITICAL: FOLLOW-UP QUERY - DO NOT CREATE FRESH QUERY
 
-2. **Interpret the current query using previous conversation context**
-   - Resolve pronouns: "it", "that", "they", "this" → refer to entities from previous turns
-   - Resolve references: "more details", "last year", "compare with" → use context from previous answers
-   - Combine topics: If user asks "what about X?" → X relates to the previous topic
+**STOP! This is a FOLLOW-UP query. You MUST modify the previous tool query, NOT create a new one from scratch.**
 
-3. **Form complete tool arguments by MODIFYING previous tool queries**
-   - Example: Previous tool query was `search_events(query='climate events in California', size=10)`
-   - Current user query: "what about last year?"
-   - New tool argument should be: `search_events(query='climate events in California last year', size=10)`
-   - KEEP the same filters/parameters from previous query, only modify what user requested
+## Previous Tool Query (YOUR STARTING POINT):
+{prev_tool_queries_example if prev_tool_queries_example else "See 'Tool Queries Used' in Previous Conversation below"}
 
-4. **Maintain conversation continuity**
-   - Build upon previous answers, don't start from scratch
-   - If user asks for clarification, use the same entities/filters from before
-   - Preserve relevant filters (date ranges, locations, categories) unless user explicitly changes them
+## MANDATORY STEPS:
+
+1. **COPY the previous tool query EXACTLY as your starting point**
+   - DO NOT start fresh
+   - DO NOT ignore previous parameters
+   - The previous query is your BASE
+
+2. **MODIFY ONLY what the user requested to change**
+   - User says "last year" → ADD year filter to previous query
+   - User says "more results" → INCREASE size parameter
+   - User says "in Texas instead" → REPLACE location only, keep everything else
+   - User says "drill down on X" → ADD X as additional filter to previous query
+
+3. **PRESERVE all other parameters from previous query**
+   - Same tool name (unless user explicitly asks for different data type)
+   - Same filters that user didn't mention changing
+   - Same size/limit unless user asks for more/less
+
+## EXAMPLES:
+
+❌ WRONG (creating fresh query):
+- Previous: `search_events(query='climate events California', size=10)`
+- User: "what about 2023?"
+- Wrong: `search_events(query='2023')` ← Missing California!
+
+✅ CORRECT (modifying previous query):
+- Previous: `search_events(query='climate events California', size=10)`
+- User: "what about 2023?"
+- Correct: `search_events(query='climate events California 2023', size=10)` ← Added 2023, kept California
+
+❌ WRONG:
+- Previous: `search_documents(query='renewable energy policy', category='environment')`
+- User: "show me more"
+- Wrong: `search_documents(query='renewable energy')` ← Lost category filter!
+
+✅ CORRECT:
+- Previous: `search_documents(query='renewable energy policy', category='environment')`
+- User: "show me more"
+- Correct: `search_documents(query='renewable energy policy', category='environment', size=20)` ← Kept all filters, increased size
 
 """
 

@@ -10,12 +10,35 @@
           "replacement": ""
         }
       },
+      "filter": {
+        "edge_ngram_filter": {
+          "type": "edge_ngram",
+          "min_gram": 2,
+          "max_gram": 50
+        }
+      },
+      "normalizer": {
+        "lowercase_trim": {
+          "type": "custom",
+          "filter": ["lowercase", "trim"]
+        }
+      },
       "analyzer": {
         "normalized_fuzzy": {
           "type": "custom",
           "tokenizer": "keyword",
           "char_filter": ["remove_whitespace"],
           "filter": ["lowercase"]
+        },
+        "autocomplete_index": {
+          "type": "custom",
+          "tokenizer": "keyword",
+          "filter": ["lowercase", "trim", "edge_ngram_filter"]
+        },
+        "autocomplete_search": {
+          "type": "custom",
+          "tokenizer": "keyword",
+          "filter": ["lowercase", "trim"]
         }
       }
     }
@@ -45,6 +68,15 @@
           "words": {
             "type": "text",
             "analyzer": "standard"
+          },
+          "normalized": {
+            "type": "keyword",
+            "normalizer": "lowercase_trim"
+          },
+          "prefix": {
+            "type": "text",
+            "analyzer": "autocomplete_index",
+            "search_analyzer": "autocomplete_search"
           }
         }
       },

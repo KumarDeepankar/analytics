@@ -23,6 +23,7 @@ from input_validator import InputValidator
 from text_search import text_search_with_filters
 from query_classifier import classify_search_text
 from document_merge import get_merged_documents_batch
+from keyword_resolver import resolve_keyword_filter as resolve_keyword_hybrid, ResolverConfig
 
 # Configure logging
 logging.basicConfig(
@@ -60,6 +61,18 @@ FUZZY_SEARCH_FIELDS = os.getenv(
 # Fields that support word search via .words sub-field (standard analyzer)
 WORD_SEARCH_FIELDS = os.getenv(
     "WORD_SEARCH_FIELDS",
+    "event_title"
+).split(",")
+
+# Fields that support prefix matching via .prefix sub-field (edge n-gram)
+PREFIX_MATCH_FIELDS = os.getenv(
+    "PREFIX_MATCH_FIELDS",
+    "event_title"
+).split(",")
+
+# Fields that support case-insensitive exact matching via .normalized sub-field
+NORMALIZED_MATCH_FIELDS = os.getenv(
+    "NORMALIZED_MATCH_FIELDS",
     "event_title"
 ).split(",")
 
@@ -220,6 +233,13 @@ mcp = FastMCP("Analytical Events Server")
 metadata = IndexMetadata()
 validator: Optional[InputValidator] = None
 
+# Keyword resolver configuration
+keyword_resolver_config = ResolverConfig(
+    prefix_fields=PREFIX_MATCH_FIELDS,
+    normalized_fields=NORMALIZED_MATCH_FIELDS,
+    max_prefix_candidates=50
+)
+
 
 # ============================================================================
 # OPENSEARCH CLIENT
@@ -274,13 +294,15 @@ async def resolve_keyword_filter(
     use_fuzzy: bool = True
 ) -> Dict[str, Any]:
     """
-    Resolve a keyword filter value using OpenSearch.
+    Resolve a keyword filter value using hybrid approach.
 
-    Strategy:
-    1. Try exact match on keyword field
-    2. If no match and field supports fuzzy, try fuzzy match on .fuzzy field
-       (handles case-insensitive + whitespace normalization via normalized_fuzzy analyzer)
-    3. Return match metadata for transparency
+    Strategy (for prefix-enabled fields like event_title):
+    1. Try exact match (case-insensitive via .normalized field)
+    2. Try prefix match with boundary-aware scoring via .prefix field
+    3. Fall back to legacy fuzzy/word matching
+
+    For other fields (country, event_theme, etc.):
+    - Uses legacy exact → fuzzy → word matching (unchanged behavior)
 
     Returns:
         {
@@ -288,115 +310,18 @@ async def resolve_keyword_filter(
             "query_value": original value,
             "matched_values": [list of matched values],
             "filter_clause": OpenSearch filter clause or None,
-            "confidence": 100 for exact, <100 for fuzzy
+            "confidence": 100 for exact, <100 for approximate
         }
     """
-    # Step 1: Check exact match exists
-    exact_query = {
-        "size": 0,
-        "query": {"term": {field: value}},
-        "aggs": {"check": {"terms": {"field": field, "size": 1}}}
-    }
-
-    try:
-        result = await opensearch_request("POST", f"{INDEX_NAME}/_search", exact_query)
-        hits = result.get("hits", {}).get("total", {}).get("value", 0)
-
-        if hits > 0:
-            # Exact match found
-            return {
-                "match_type": "exact",
-                "query_value": value,
-                "matched_values": [value],
-                "filter_clause": {"term": {field: value}},
-                "confidence": 100,
-                "hit_count": hits
-            }
-    except Exception as e:
-        logger.warning(f"Exact match query failed: {e}")
-
-    # Step 2: Try fuzzy match on .fuzzy field and word match on .words field
-    # The normalized_fuzzy analyzer handles case-insensitive + whitespace normalization
-    if use_fuzzy and field in FUZZY_SEARCH_FIELDS:
-        search_field = f"{field}.fuzzy"
-
-        # Build query - use bool.should to combine fuzzy and word match
-        should_clauses = [
-            {
-                "match": {
-                    search_field: {
-                        "query": value,
-                        "fuzziness": "AUTO",
-                        "prefix_length": 1
-                    }
-                }
-            }
-        ]
-
-        # Add word match for fields that support it (no fuzziness - exact word match)
-        if field in WORD_SEARCH_FIELDS:
-            should_clauses.append({
-                "match": {
-                    f"{field}.words": {
-                        "query": value
-                    }
-                }
-            })
-
-        fuzzy_query = {
-            "size": 0,
-            "query": {
-                "bool": {
-                    "should": should_clauses,
-                    "minimum_should_match": 1
-                }
-            },
-            "aggs": {
-                "matched_values": {
-                    "terms": {"field": field, "size": 10}
-                }
-            }
-        }
-
-        try:
-            result = await opensearch_request("POST", f"{INDEX_NAME}/_search", fuzzy_query)
-            hits = result.get("hits", {}).get("total", {}).get("value", 0)
-            buckets = result.get("aggregations", {}).get("matched_values", {}).get("buckets", [])
-
-            if hits > 0 and buckets:
-                matched_values = [b["key"] for b in buckets]
-
-                # Calculate confidence based on string similarity
-                best_match = matched_values[0]
-                confidence = fuzz.ratio(value.lower(), str(best_match).lower())
-
-                # Build filter for all matched values
-                if len(matched_values) == 1:
-                    filter_clause = {"term": {field: matched_values[0]}}
-                else:
-                    filter_clause = {"terms": {field: matched_values}}
-
-                return {
-                    "match_type": "approximate",
-                    "query_value": value,
-                    "matched_values": matched_values,
-                    "filter_clause": filter_clause,
-                    "confidence": round(confidence, 1),
-                    "hit_count": hits,
-                    "warning": f"Fuzzy match: '{value}' matched to {matched_values}"
-                }
-        except Exception as e:
-            logger.warning(f"Fuzzy match query failed: {e}")
-
-    # No match found
-    return {
-        "match_type": "none",
-        "query_value": value,
-        "matched_values": [],
-        "filter_clause": None,
-        "confidence": 0,
-        "hit_count": 0
-    }
+    return await resolve_keyword_hybrid(
+        field=field,
+        value=value,
+        config=keyword_resolver_config,
+        opensearch_request=opensearch_request,
+        index_name=INDEX_NAME,
+        fuzzy_search_fields=FUZZY_SEARCH_FIELDS,
+        word_search_fields=WORD_SEARCH_FIELDS
+    )
 
 
 # ============================================================================

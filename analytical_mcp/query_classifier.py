@@ -32,9 +32,13 @@ MIN_WORD_OVERLAP_PERCENT = int(
     os.getenv("MIN_WORD_OVERLAP_PERCENT", "50")
 )
 
-# Single field to use for text classification (empty = disabled)
-# Only this field will be queried for n-gram matching
-CLASSIFICATION_FIELD = os.getenv("CLASSIFICATION_FIELD", "event_theme").strip() or None
+# Fields to use for text classification in PRIORITY ORDER (comma-separated)
+# First field that matches above threshold wins
+# Example: "event_theme,country" - checks event_theme first, then country
+CLASSIFICATION_FIELDS = [
+    f.strip() for f in os.getenv("CLASSIFICATION_FIELD", "event_theme").split(",")
+    if f.strip()
+]
 
 # Common stopwords to ignore during classification
 DEFAULT_STOPWORDS = {
@@ -282,9 +286,10 @@ async def classify_search_text(
     Classify free-form search text into structured filters.
 
     Strategy:
-    1. Tokenize and remove stopwords
-    2. Try n-gram matching against CLASSIFICATION_FIELD using .words/.fuzzy
-    3. Unmatched terms go to free text search
+    1. Try matching ORIGINAL query against .fuzzy field first (handles codes like "MS NR.: 804245-09")
+    2. If no match, tokenize and remove stopwords
+    3. Try n-gram matching against CLASSIFICATION_FIELD using .words/.fuzzy
+    4. Unmatched terms go to free text search
 
     Args:
         search_text: Raw search query from user
@@ -308,29 +313,72 @@ async def classify_search_text(
 
     logger.info(f"Classifying search text: '{search_text}'")
 
-    # Step 1: Tokenize
+    # Validate classification fields exist
+    valid_fields = [f for f in CLASSIFICATION_FIELDS if f in keyword_fields]
+    if not valid_fields:
+        # No valid classification fields configured - all tokens go to text search
+        tokens = tokenize_query(search_text)
+        result.unclassified_terms = tokens if tokens else []
+        if CLASSIFICATION_FIELDS:
+            result.warnings.append(f"No valid CLASSIFICATION_FIELDS found in keyword_fields")
+        return result
+
+    logger.info(f"Classification fields (priority order): {valid_fields}")
+
+    # ==========================================================================
+    # STEP 1: Try matching ORIGINAL query against .fuzzy fields (priority order)
+    # This handles structured codes like "MS NR.: 804245-09" that should match as-is
+    # The normalized_fuzzy analyzer removes whitespace and lowercases, so:
+    # "MS NR.: 804245-09" -> "msnr.:804245-09" matches stored "msnr.:804245-09"
+    # First field that matches above threshold wins (priority order)
+    # ==========================================================================
+    original_query = search_text.strip()
+
+    for field in valid_fields:
+        if field not in fuzzy_search_fields:
+            continue
+
+        logger.info(f"Trying original query match: '{original_query}' against {field}.fuzzy")
+
+        match_result = await match_against_fuzzy_field(
+            original_query, field, opensearch_request, index_name
+        )
+
+        if match_result["confidence"] >= confidence_threshold:
+            result.classified_filters[field] = match_result["matched_value"]
+            result.classification_details[field] = {
+                "match_type": "fuzzy_original",
+                "confidence": round(match_result["confidence"], 1),
+                "query_terms": [original_query],
+                "matched_value": match_result["matched_value"],
+                "candidates_considered": match_result.get("all_candidates", [])
+            }
+
+            logger.info(
+                f"Original query matched: '{original_query}' -> {field}='{match_result['matched_value']}' "
+                f"(confidence: {match_result['confidence']:.1f}%)"
+            )
+
+            # Full match on original query - no unclassified terms
+            return result
+
+    # ==========================================================================
+    # STEP 2: Tokenize for n-gram matching (original query didn't match any field)
+    # ==========================================================================
     tokens = tokenize_query(search_text)
 
     if not tokens:
         result.warnings.append("Search text contained only stopwords")
         return result
 
-    # Step 2: Track which tokens have been matched
+    # Track which tokens have been matched
     matched_tokens: Set[str] = set()
 
-    # Step 3: Try n-gram matching against SINGLE configured field only
-    if not CLASSIFICATION_FIELD or CLASSIFICATION_FIELD not in keyword_fields:
-        # No valid classification field configured - all tokens go to text search
-        result.unclassified_terms = tokens
-        if CLASSIFICATION_FIELD:
-            result.warnings.append(f"CLASSIFICATION_FIELD '{CLASSIFICATION_FIELD}' not in keyword_fields")
-        return result
-
-    field = CLASSIFICATION_FIELD
-    use_words = field in word_search_fields
-    use_fuzzy = field in fuzzy_search_fields
-
-    # Generate n-grams from remaining tokens (largest first)
+    # ==========================================================================
+    # STEP 3: Try n-gram matching against classification fields (priority order)
+    # First field that matches above threshold wins
+    # ==========================================================================
+    # Generate n-grams from tokens (largest first)
     ngrams = generate_ngrams(tokens, max_n=4)
 
     for ngram in ngrams:
@@ -338,53 +386,64 @@ async def classify_search_text(
         if all(t in matched_tokens for t in ngram):
             continue
 
-        # Skip if field already has a match (only one match per field)
-        if field in result.classified_filters:
-            continue
-
         ngram_text = " ".join(ngram)
-        best_match = None
-        best_confidence = 0
 
-        # Try .words field (token-level matching)
-        if use_words:
-            match_result = await match_against_words_field(
-                ngram_text, field, opensearch_request, index_name,
-                min_should_match=f"{MIN_WORD_OVERLAP_PERCENT}%"
-            )
-            if match_result["confidence"] > best_confidence:
-                best_confidence = match_result["confidence"]
-                best_match = match_result
+        # Try each field in priority order - first match wins
+        for field in valid_fields:
+            # Skip if field already has a match
+            if field in result.classified_filters:
+                continue
 
-        # Try .fuzzy field (whole-string matching)
-        if use_fuzzy:
-            match_result = await match_against_fuzzy_field(
-                ngram_text, field, opensearch_request, index_name
-            )
-            if match_result["confidence"] > best_confidence:
-                best_confidence = match_result["confidence"]
-                best_match = match_result
+            use_words = field in word_search_fields
+            use_fuzzy = field in fuzzy_search_fields
 
-        # Accept match if above threshold
-        if best_match and best_confidence >= confidence_threshold:
-            result.classified_filters[field] = best_match["matched_value"]
-            result.classification_details[field] = {
-                "match_type": best_match["match_type"],
-                "confidence": round(best_match["confidence"], 1),
-                "query_terms": ngram,
-                "matched_value": best_match["matched_value"],
-                "candidates_considered": best_match.get("all_candidates", [])
-            }
+            best_match = None
+            best_confidence = 0
 
-            # Mark tokens as matched
-            matched_tokens.update(ngram)
+            # Try .words field (token-level matching)
+            if use_words:
+                match_result = await match_against_words_field(
+                    ngram_text, field, opensearch_request, index_name,
+                    min_should_match=f"{MIN_WORD_OVERLAP_PERCENT}%"
+                )
+                if match_result["confidence"] > best_confidence:
+                    best_confidence = match_result["confidence"]
+                    best_match = match_result
 
-            logger.info(
-                f"Classified '{ngram_text}' -> {field}='{best_match['matched_value']}' "
-                f"(confidence: {best_match['confidence']:.1f}%)"
-            )
+            # Try .fuzzy field (whole-string matching)
+            if use_fuzzy:
+                match_result = await match_against_fuzzy_field(
+                    ngram_text, field, opensearch_request, index_name
+                )
+                if match_result["confidence"] > best_confidence:
+                    best_confidence = match_result["confidence"]
+                    best_match = match_result
 
-    # Step 4: Collect unmatched tokens
+            # Accept match if above threshold - first field wins
+            if best_match and best_confidence >= confidence_threshold:
+                result.classified_filters[field] = best_match["matched_value"]
+                result.classification_details[field] = {
+                    "match_type": best_match["match_type"],
+                    "confidence": round(best_match["confidence"], 1),
+                    "query_terms": ngram,
+                    "matched_value": best_match["matched_value"],
+                    "candidates_considered": best_match.get("all_candidates", [])
+                }
+
+                # Mark tokens as matched
+                matched_tokens.update(ngram)
+
+                logger.info(
+                    f"Classified '{ngram_text}' -> {field}='{best_match['matched_value']}' "
+                    f"(confidence: {best_match['confidence']:.1f}%)"
+                )
+
+                # Break inner loop - this n-gram is matched, move to next n-gram
+                break
+
+    # ==========================================================================
+    # STEP 4: Collect unmatched tokens
+    # ==========================================================================
     result.unclassified_terms = [t for t in tokens if t not in matched_tokens]
 
     if result.unclassified_terms:
@@ -398,6 +457,6 @@ def get_classifier_config() -> Dict[str, Any]:
     return {
         "confidence_threshold": CLASSIFICATION_CONFIDENCE_THRESHOLD,
         "min_word_overlap_percent": MIN_WORD_OVERLAP_PERCENT,
-        "classification_field": CLASSIFICATION_FIELD,
+        "classification_fields": CLASSIFICATION_FIELDS,
         "stopwords_count": len(STOPWORDS)
     }

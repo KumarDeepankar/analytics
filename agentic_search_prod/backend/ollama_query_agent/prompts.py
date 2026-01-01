@@ -154,13 +154,25 @@ Return a PlanningDecision JSON with: `decision_type`, `reasoning`
 - For `respond_directly`: provide `content`, omit `tool_calls`
 - For `execute_plan`: provide `tool_calls` array (1+ tools), omit `content`
 
+**Multi-query guidance:**
+- For critical/comprehensive analysis, generate multiple queries for better coverage
+- Break down comparative queries: e.g., "compare X vs Y" → 2 parallel searches
+- Use single query for simple lookups
+
 **Examples:**
 ```json
 {{"decision_type": "respond_directly", "reasoning": "Greeting", "content": "Hello! How can I help?"}}
 ```
 
 ```json
-{{"decision_type": "execute_plan", "reasoning": "Search needed", "tool_calls": [{{"tool": "search_events", "arguments": {{"query": "climate"}}}}]}}
+{{"decision_type": "execute_plan", "reasoning": "Single search", "tool_calls": [{{"tool": "search_events", "arguments": {{"query": "climate"}}}}]}}
+```
+
+```json
+{{"decision_type": "execute_plan", "reasoning": "Critical analysis - multiple queries for coverage", "tool_calls": [
+  {{"tool": "search_events", "arguments": {{"query": "renewable energy policy"}}}},
+  {{"tool": "search_events", "arguments": {{"query": "renewable energy impact"}}}}
+]}}
 ```"""
 
 
@@ -209,6 +221,7 @@ Sources: {successes} successful, {errors} errors
 - Extract relevant facts and address the query with findings
 - Link sources with icon only: `[↗](url)` - shows ↗, hides URL
 - Keep response natural and conversational
+- If results are limited or filtered, mention that more data may be available
 {followup_guidelines}
 # STRICT RULES - DO NOT VIOLATE
 

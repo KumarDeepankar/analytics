@@ -5,11 +5,16 @@
       "rids": {
         "terms": {"field": "rid", "size": 10000},
         "aggs": {
-          "months": {
-            "date_histogram": {
+          "month_count": {
+            "cardinality": {
               "field": "event_date",
-              "calendar_interval": "month",
-              "min_doc_count": 1
+              "precision_threshold": 100
+            }
+          },
+          "multi_month": {
+            "bucket_selector": {
+              "buckets_path": {"count": "month_count"},
+              "script": "params.count > 1"
             }
           }
         }

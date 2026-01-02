@@ -899,7 +899,8 @@ async def analyze_events(
                 "calendar_interval": interval,
                 "format": format_map.get(interval, "yyyy-MM-dd"),
                 "min_doc_count": 0,
-                "order": {"_key": "asc"}
+                "order": {"_key": "asc"},
+                "time_zone": "UTC"
             },
             "aggs": {
                 # Count unique IDs per time bucket

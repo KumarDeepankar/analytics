@@ -1100,6 +1100,16 @@ async def analyze_events(
                 for b in buckets
             ]
         }
+        # Add note if bucket sum differs from total (OpenSearch cardinality approximation)
+        try:
+            bucket_sum = sum(b.get("unique_ids", {}).get("value", b["doc_count"]) for b in buckets)
+            if bucket_sum != total_matched and total_matched > 0:
+                aggregations["date_histogram"]["note"] = (
+                    f"Bucket sum ({bucket_sum}) differs from total ({total_matched}) "
+                    "due to OpenSearch cardinality approximation"
+                )
+        except Exception:
+            pass  # Silently skip note if calculation fails
 
     # Numeric histogram results
     if parsed_numeric_histogram and "numeric_histogram_agg" in aggs:

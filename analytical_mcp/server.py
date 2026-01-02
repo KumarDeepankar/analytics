@@ -141,10 +141,11 @@ samples_per_bucket: int - sample docs per aggregation bucket (default from SAMPL
 </parameters>
 
 <date_formats>
-"2023" → full year (Jan 1 - Dec 31)
-"Q1 2023" or "2023-Q1" or "2023Q1" → quarter (Jan 1 - Mar 31)
-"2023-06" → month (Jun 1 - Jun 30)
-"2023-06-15" → exact date
+"2023" → full year (gte: Jan 1, lt: Jan 1 next year)
+"Q1 2023" or "2023-Q1" or "2023Q1" → quarter (gte: Jan 1, lt: Apr 1)
+"2023-06" → month (gte: Jun 1, lt: Jul 1)
+"2023-06-15" → exact date (no expansion)
+Note: Uses "lt" (less than) with next period start to correctly include all timestamps within the period.
 </date_formats>
 
 <examples>
@@ -171,13 +172,13 @@ Filter by month: filters='{{"event_date": "2023-06"}}', group_by="country"
 Filter by exact date: filters='{{"event_date": "2023-06-15"}}', group_by="country"
 
 # Date range_filters examples:
-Date range (exact dates): range_filters='{{"event_date": {{"gte": "2023-01-01", "lte": "2023-12-31"}}}}', group_by="country"
-Date range (year boundaries): range_filters='{{"event_date": {{"gte": "2022", "lte": "2023"}}}}', group_by="country"
+Date range (exact dates): range_filters='{{"event_date": {{"gte": "2023-01-01", "lt": "2024-01-01"}}}}', group_by="country"
+Date range (year boundaries): range_filters='{{"event_date": {{"gte": "2022", "lt": "2024"}}}}', group_by="country"
 Date range (quarter start): range_filters='{{"event_date": {{"gte": "Q2 2023"}}}}', group_by="event_theme"
-Date range (month boundaries): range_filters='{{"event_date": {{"gte": "2023-06", "lte": "2023-09"}}}}', group_by="country"
+Date range (month boundaries): range_filters='{{"event_date": {{"gte": "2023-06", "lt": "2023-10"}}}}', group_by="country"
 Date range (open-ended from): range_filters='{{"event_date": {{"gte": "2023-01-01"}}}}', group_by="country"
-Date range (open-ended to): range_filters='{{"event_date": {{"lte": "2023-06-30"}}}}', group_by="country"
-Date range + trend: range_filters='{{"event_date": {{"gte": "2022", "lte": "2023"}}}}', date_histogram='{{"field": "event_date", "interval": "month"}}'
+Date range (open-ended to): range_filters='{{"event_date": {{"lt": "2023-07-01"}}}}', group_by="country"
+Date range + trend: range_filters='{{"event_date": {{"gte": "2022", "lt": "2024"}}}}', date_histogram='{{"field": "event_date", "interval": "month"}}'
 
 # fallback_search examples (LAST RESORT - prefer filters when field is known):
 Fallback + aggregation: fallback_search="singing events", group_by="country"

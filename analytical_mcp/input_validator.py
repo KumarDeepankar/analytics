@@ -171,9 +171,12 @@ class InputValidator:
         """
         Validate and normalize date. Supports multiple formats:
         - Full date: "2023-01-15" -> "2023-01-15"
-        - Month: "2023-06" -> {"gte": "2023-06-01", "lte": "2023-06-30"}
-        - Quarter: "Q1 2023" or "2023-Q1" -> {"gte": "2023-01-01", "lte": "2023-03-31"}
-        - Year: "2023" -> {"gte": "2023-01-01", "lte": "2023-12-31"}
+        - Month: "2023-06" -> {"gte": "2023-06-01", "lt": "2023-07-01"}
+        - Quarter: "Q1 2023" or "2023-Q1" -> {"gte": "2023-01-01", "lt": "2023-04-01"}
+        - Year: "2023" -> {"gte": "2023-01-01", "lt": "2024-01-01"}
+
+        Note: Uses "lt" (less than) with next period start instead of "lte" (less than
+        or equal) with period end to correctly include all timestamps within the period.
 
         Args:
             field: Field name
@@ -212,14 +215,14 @@ class InputValidator:
         try:
             parsed = datetime.strptime(value_str, "%Y-%m")
             year, month = parsed.year, parsed.month
-            # Calculate last day of month
+            # Calculate first day of next month
             if month == 12:
-                last_day = date(year + 1, 1, 1) - timedelta(days=1)
+                next_month_start = date(year + 1, 1, 1)
             else:
-                last_day = date(year, month + 1, 1) - timedelta(days=1)
+                next_month_start = date(year, month + 1, 1)
             range_result = {
                 "gte": f"{year:04d}-{month:02d}-01",
-                "lte": last_day.isoformat()
+                "lt": next_month_start.isoformat()
             }
             return ValidationResult(
                 valid=True,
@@ -227,7 +230,7 @@ class InputValidator:
                 original_value=value,
                 confidence=100.0,
                 field_type="date_range",
-                warnings=[f"Expanded '{value}' to range {range_result['gte']} - {range_result['lte']}"],
+                warnings=[f"Expanded '{value}' to range {range_result['gte']} - {range_result['lt']}"],
                 suggestions=[]
             )
         except ValueError:
@@ -249,10 +252,15 @@ class InputValidator:
 
             if 1 <= quarter <= 4:
                 quarter_starts = {1: "01-01", 2: "04-01", 3: "07-01", 4: "10-01"}
-                quarter_ends = {1: "03-31", 2: "06-30", 3: "09-30", 4: "12-31"}
+                # Next quarter start (Q4 rolls over to next year Q1)
+                if quarter == 4:
+                    next_quarter_start = f"{year + 1}-01-01"
+                else:
+                    next_quarter_starts = {1: "04-01", 2: "07-01", 3: "10-01"}
+                    next_quarter_start = f"{year}-{next_quarter_starts[quarter]}"
                 range_result = {
                     "gte": f"{year}-{quarter_starts[quarter]}",
-                    "lte": f"{year}-{quarter_ends[quarter]}"
+                    "lt": next_quarter_start
                 }
                 return ValidationResult(
                     valid=True,
@@ -260,7 +268,7 @@ class InputValidator:
                     original_value=value,
                     confidence=100.0,
                     field_type="date_range",
-                    warnings=[f"Expanded 'Q{quarter} {year}' to range {range_result['gte']} - {range_result['lte']}"],
+                    warnings=[f"Expanded 'Q{quarter} {year}' to range {range_result['gte']} - {range_result['lt']}"],
                     suggestions=[]
                 )
 
@@ -269,7 +277,7 @@ class InputValidator:
             year = int(value_str)
             range_result = {
                 "gte": f"{year}-01-01",
-                "lte": f"{year}-12-31"
+                "lt": f"{year + 1}-01-01"
             }
             return ValidationResult(
                 valid=True,
@@ -336,7 +344,11 @@ class InputValidator:
                 if op in ("gte", "gt"):
                     normalized[op] = expanded["gte"]
                 else:  # lte, lt
-                    normalized[op] = expanded["lte"]
+                    # Use "lt" operator with next period start for correct boundary
+                    # e.g., lte: "2023" becomes lt: "2024-01-01" to include all of 2023
+                    normalized["lt"] = expanded["lt"]
+                    if op == "lte":
+                        warnings.append(f"Converted '{op}' to 'lt' for correct date boundary")
                 warnings.extend(date_result.warnings)
             else:
                 normalized[op] = date_result.normalized_value

@@ -1,0 +1,18 @@
+  {
+    "size": 0,
+    "query": {"range": {"event_date": {"gte": "2024-01-01", "lt": "2025-01-01"}}},
+    "aggs": {
+      "rids": {
+        "terms": {"field": "rid", "size": 10000},
+        "aggs": {
+          "months": {
+            "date_histogram": {
+              "field": "event_date",
+              "calendar_interval": "month",
+              "min_doc_count": 1
+            }
+          }
+        }
+      }
+    }
+  }

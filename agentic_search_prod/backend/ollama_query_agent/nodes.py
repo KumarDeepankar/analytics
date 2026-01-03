@@ -151,6 +151,22 @@ def extract_sources_from_tool_result(tool_result: Dict[str, Any]) -> List[Dict[s
                 result_array = structured_content[pattern]
                 break
 
+        # Fallback: extract from aggregation samples (when group_by + samples_per_bucket is used)
+        if not result_array:
+            aggregations = structured_content.get('aggregations', {})
+            group_by_results = aggregations.get('group_by', [])
+
+            all_samples = []
+            for bucket in group_by_results:
+                if isinstance(bucket, dict):
+                    samples = bucket.get('samples', [])
+                    if isinstance(samples, list):
+                        all_samples.extend(samples)
+
+            if all_samples:
+                result_array = all_samples
+
+        # Still no results - return empty
         if not result_array:
             return sources
 
@@ -252,7 +268,7 @@ async def parallel_initialization_node(state: SearchAgentState) -> SearchAgentSt
         # AUTO-RESET: If we have 1 or more turns, reset for fresh conversation
         # This allows only 1 follow-up query per conversation cycle
         # Change >= 1 to >= 2 if you want to allow 2 follow-ups, etc.
-        MAX_FOLLOWUP_TURNS = 1  # Number of follow-up turns allowed
+        MAX_FOLLOWUP_TURNS = 2  # Number of follow-up turns allowed
         if len(conversation_history) > MAX_FOLLOWUP_TURNS:
             conversation_history = []
             conversation_was_reset = True

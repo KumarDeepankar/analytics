@@ -7,6 +7,7 @@ import logging
 from typing import Dict, Any, List, Optional, AsyncGenerator, Type, TypeVar
 import httpx
 from pydantic import BaseModel
+from .error_handler import format_error_for_display
 
 logger = logging.getLogger(__name__)
 
@@ -73,13 +74,13 @@ class OllamaClient:
 
         except httpx.ConnectError as e:
             logger.error(f"Connection error to Ollama: {e}")
-            return "Error: Cannot connect to Ollama. Please ensure Ollama is running on localhost:11434"
+            return f"Error: {format_error_for_display('connection error')}"
         except httpx.TimeoutException as e:
             logger.error(f"Timeout error from Ollama: {e}")
-            return "Error: Ollama request timed out"
+            return f"Error: {format_error_for_display('timeout')}"
         except Exception as e:
             logger.error(f"Error generating response from Ollama: {e}")
-            return f"Error: Unable to generate response - {str(e)}"
+            return f"Error: {format_error_for_display(str(e))}"
 
     async def generate_structured_response(
         self,
@@ -226,7 +227,7 @@ Generate the actual JSON data now (not the schema):"""
 
         except Exception as e:
             logger.error(f"Error streaming response from Ollama: {e}")
-            yield f"Error: Unable to stream response - {str(e)}"
+            yield f"Error: {format_error_for_display(str(e))}"
 
     async def close(self):
         """Close the HTTP client"""

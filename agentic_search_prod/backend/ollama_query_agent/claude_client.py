@@ -29,6 +29,7 @@ import os
 from typing import Type, TypeVar, Optional
 import httpx
 from pydantic import BaseModel
+from .error_handler import format_error_for_display
 
 logger = logging.getLogger(__name__)
 
@@ -202,16 +203,18 @@ class ClaudeClient:
 
         except httpx.HTTPStatusError as e:
             logger.error(f"HTTP error from Claude: {e.response.status_code} - {e.response.text}")
-            return f"Error: Claude API error - {e.response.status_code}"
+            # Include response text for better error categorization
+            error_detail = f"HTTP {e.response.status_code}: {e.response.text}"
+            return f"Error: {format_error_for_display(error_detail)}"
         except httpx.ConnectError as e:
             logger.error(f"Connection error to Claude: {e}")
-            return "Error: Cannot connect to Claude API. Please check your internet connection"
+            return f"Error: {format_error_for_display('connection error')}"
         except httpx.TimeoutException as e:
             logger.error(f"Timeout error from Claude: {e}")
-            return "Error: Claude request timed out"
+            return f"Error: {format_error_for_display('timeout')}"
         except Exception as e:
             logger.error(f"Error generating response from Claude: {e}")
-            return f"Error: Unable to generate response - {str(e)}"
+            return f"Error: {format_error_for_display(str(e))}"
 
     async def generate_structured_response(
         self,
@@ -369,7 +372,9 @@ class ClaudeClient:
         except httpx.HTTPStatusError as e:
             logger.error(f"HTTP error from Claude: {e.response.status_code}")
             logger.error(f"Response: {e.response.text}")
-            raise ValueError(f"Claude API error: {e.response.status_code}")
+            # Include response text for better error categorization (e.g., token limit errors)
+            error_detail = f"HTTP {e.response.status_code}: {e.response.text}"
+            raise ValueError(error_detail)
         except Exception as e:
             logger.error(f"Error in structured response: {e}")
             raise

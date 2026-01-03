@@ -40,6 +40,7 @@ from langgraph.types import Command, StateSnapshot
 
 from ollama_query_agent.graph_definition import compiled_agent as search_compiled_agent
 from ollama_query_agent.mcp_tool_client import mcp_tool_client
+from ollama_query_agent.error_handler import format_error_for_display
 from ollama_query_agent.model_config import (
     get_available_providers,
     get_models_for_provider,
@@ -392,19 +393,22 @@ async def search_interaction_stream(
 
                 elif event_type == "on_chain_error":
                     error_message = data if isinstance(data, str) else str(data)
-                    yield f"ERROR:Agent error in node {event_name}: {error_message}\n"
+                    user_friendly_error = format_error_for_display(error_message)
+                    yield f"ERROR:{user_friendly_error}\n"
 
             if not final_response_started:
-                yield "ERROR:Agent finished without generating a final response.\n"
+                yield "ERROR:Unable to generate a response. This may be due to a connection issue with the data sources. Please try again, or raise a support ticket if the problem continues.\n"
 
         except Exception as e_main_stream:
             traceback.print_exc()
-            yield f"ERROR:A fatal error occurred in the search agent stream: {str(e_main_stream)}\n"
+            user_friendly_error = format_error_for_display(str(e_main_stream))
+            yield f"ERROR:{user_friendly_error}\n"
 
 
     except Exception as e:
         traceback.print_exc()
-        yield f"ERROR:Failed to initialize search agent: {str(e)}\n"
+        user_friendly_error = format_error_for_display(str(e))
+        yield f"ERROR:{user_friendly_error}\n"
 
 
 @app.post("/search")

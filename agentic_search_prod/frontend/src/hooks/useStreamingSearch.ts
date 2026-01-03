@@ -90,12 +90,14 @@ export function useStreamingSearch() {
         await processStream(response, assistantMessageId);
       } catch (error) {
         if (error instanceof Error && error.name === 'AbortError') {
-
+          // Request was cancelled, no need to show error
         } else {
-
-          let errorMessage = 'An error occurred while processing your request.';
+          // Client-side error handling with user-friendly messages
+          let errorMessage = '⚠️ An unexpected error occurred while processing your request. Please try again, or raise a support ticket if the problem continues.';
 
           if (error instanceof Error) {
+            const errorLower = error.message.toLowerCase();
+
             if (error.message.includes('Authentication required') ||
                 error.message.includes('401') ||
                 error.message.includes('403')) {
@@ -104,11 +106,16 @@ export function useStreamingSearch() {
               setTimeout(() => {
                 window.location.href = getBackendUrl('/auth/login');
               }, 2000);
-            } else if (error.message.includes('Failed to fetch')) {
-              errorMessage = '⚠️ Cannot connect to the server. Please check if the backend is running.';
-            } else {
-              errorMessage = `⚠️ Error: ${error.message}`;
+            } else if (error.message.includes('Failed to fetch') ||
+                       errorLower.includes('network') ||
+                       errorLower.includes('connection')) {
+              errorMessage = '⚠️ Unable to connect to the server. This may be a temporary network issue. Please check your connection and try again, or raise a support ticket if the problem continues.';
+            } else if (errorLower.includes('timeout') || errorLower.includes('timed out')) {
+              errorMessage = '⚠️ Your request took too long to process. Please try simplifying your query or using a shorter time range. If the issue persists, please raise a support ticket.';
+            } else if (errorLower.includes('token') && (errorLower.includes('limit') || errorLower.includes('exceed'))) {
+              errorMessage = '⚠️ Your query requires analyzing too much data. Please try using a shorter time range or being more specific in your query.';
             }
+            // For other errors, use the generic message set above
           }
 
           updateStreamingContent(assistantMessageId, errorMessage);
@@ -234,11 +241,11 @@ export function useStreamingSearch() {
               break;
 
             case StreamMarkerType.ERROR:
-              // Handle error
-
+              // Handle error - display user-friendly message from backend
+              // Backend now sends properly formatted user-friendly messages
               updateStreamingContent(
                 messageId,
-                `Error: ${parsedChunk.content}`
+                `⚠️ ${parsedChunk.content}`
               );
               break;
 

@@ -15,6 +15,7 @@ from .markdown_converter import (
     generate_no_results_markdown
 )
 from .theme_selector import select_theme_smart
+from .error_handler import format_error_for_display
 
 logger = logging.getLogger(__name__)
 
@@ -560,8 +561,10 @@ async def create_execution_plan_node(state: SearchAgentState) -> SearchAgentStat
 
     except Exception as e:
         logger.error(f"Error creating execution plan: {e}")
+        # Convert raw error to user-friendly message
+        user_friendly_error = format_error_for_display(str(e))
         state["thinking_steps"].append(f"❌ Failed to create plan: {str(e)}")
-        state["error_message"] = f"Planning failed: {str(e)}"
+        state["error_message"] = user_friendly_error
 
     # Validation: Ensure node produced valid output before returning
     # This prevents the routing function from having to handle invalid states
@@ -687,12 +690,14 @@ async def execute_all_tasks_parallel_node(state: SearchAgentState) -> SearchAgen
         state["current_task_index"] = total_tasks
 
         if failed_count > 0 and completed_count == 0:
-            state["error_message"] = f"All {total_tasks} tasks failed"
+            state["error_message"] = "Unable to retrieve data from the configured sources. Please try again or raise a support ticket if the problem continues."
 
     except Exception as e:
         logger.error(f"Error in parallel execution: {e}")
+        # Convert raw error to user-friendly message
+        user_friendly_error = format_error_for_display(str(e))
         state["thinking_steps"].append(f"❌ Parallel execution error: {str(e)}")
-        state["error_message"] = f"Parallel execution failed: {str(e)}"
+        state["error_message"] = user_friendly_error
 
     return state
 
@@ -817,8 +822,10 @@ Output: Pure markdown text that will be rendered client-side with beautiful them
         # Single unified fallback for ANY error (gathering OR synthesis)
         # This replaces the previous duplicate fallback blocks
         logger.error(f"Synthesis failed: {e}")
+        # Convert raw error to user-friendly message
+        user_friendly_error = format_error_for_display(str(e))
         state["thinking_steps"].append(f"⚠️ Synthesis failed, generating fallback response")
-        state["error_message"] = f"Synthesis failed: {str(e)}"
+        state["error_message"] = user_friendly_error
 
         # Prefer showing actual data if available, rather than generic "no results"
         gathered_info = state.get("gathered_information")

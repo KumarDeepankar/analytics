@@ -39,9 +39,9 @@ export function InputArea() {
   // Count completed assistant messages (conversation turns)
   const completedTurns = state.messages.filter(m => m.type === 'assistant' && !m.isStreaming).length;
 
-  // 2 follow-ups are allowed (MAX_FOLLOWUP_TURNS = 2)
-  const canAskFollowUp = completedTurns >= 1 && completedTurns <= 2;
-  const followUpLimitReached = completedTurns >= 3;
+  // 4 follow-ups are allowed (MAX_FOLLOWUP_TURNS = 4)
+  const canAskFollowUp = completedTurns >= 1 && completedTurns <= 4;
+  const followUpLimitReached = completedTurns >= 5;
 
   const handleSubmit = () => {
     if (!query.trim() || isSearching) return;

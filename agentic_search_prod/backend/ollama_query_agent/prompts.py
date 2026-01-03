@@ -92,24 +92,24 @@ def create_multi_task_planning_prompt(
 ## EXAMPLES:
 
 ❌ WRONG (creating fresh query):
-- Previous: `search_events(query='climate events California', size=10)`
+- Previous: `analyze_events(filters='{"country": "India"}', group_by='event_theme')`
 - User: "what about 2023?"
-- Wrong: `search_events(query='2023')` ← Missing California!
+- Wrong: `analyze_events(filters='{"year": 2023}')` ← Missing country filter!
 
 ✅ CORRECT (modifying previous query):
-- Previous: `search_events(query='climate events California', size=10)`
+- Previous: `analyze_events(filters='{"country": "India"}', group_by='event_theme')`
 - User: "what about 2023?"
-- Correct: `search_events(query='climate events California 2023', size=10)` ← Added 2023, kept California
+- Correct: `analyze_events(filters='{"country": "India", "year": 2023}', group_by='event_theme')` ← Added year, kept country
 
 ❌ WRONG:
-- Previous: `search_documents(query='renewable energy policy', category='environment')`
+- Previous: `analyze_events(filters='{"country": "USA"}', group_by='country', top_n=5)`
 - User: "show me more"
-- Wrong: `search_documents(query='renewable energy')` ← Lost category filter!
+- Wrong: `analyze_events(group_by='country')` ← Lost country filter!
 
 ✅ CORRECT:
-- Previous: `search_documents(query='renewable energy policy', category='environment')`
+- Previous: `analyze_events(filters='{"country": "USA"}', group_by='country', top_n=5)`
 - User: "show me more"
-- Correct: `search_documents(query='renewable energy policy', category='environment', size=20)` ← Kept all filters, increased size
+- Correct: `analyze_events(filters='{"country": "USA"}', group_by='country', top_n=10)` ← Kept all filters, increased top_n
 
 """
 
@@ -165,14 +165,11 @@ Return a PlanningDecision JSON with: `decision_type`, `reasoning`
 ```
 
 ```json
-{{"decision_type": "execute_plan", "reasoning": "Single search", "tool_calls": [{{"tool": "search_events", "arguments": {{"query": "climate"}}}}]}}
+{{"decision_type": "execute_plan", "reasoning": "Filter events by country", "tool_calls": [{{"tool": "analyze_events", "arguments": {{"filters": "{{\"country\": \"India\"}}"}}}}]}}
 ```
 
 ```json
-{{"decision_type": "execute_plan", "reasoning": "Critical analysis - multiple queries for coverage", "tool_calls": [
-  {{"tool": "search_events", "arguments": {{"query": "renewable energy policy"}}}},
-  {{"tool": "search_events", "arguments": {{"query": "renewable energy impact"}}}}
-]}}
+{{"decision_type": "execute_plan", "reasoning": "Group events with samples", "tool_calls": [{{"tool": "analyze_events", "arguments": {{"group_by": "country", "top_n": 5, "samples_per_bucket": 3}}}}]}}
 ```"""
 
 

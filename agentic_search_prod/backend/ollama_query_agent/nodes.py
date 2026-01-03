@@ -135,11 +135,14 @@ def extract_sources_from_tool_result(tool_result: Dict[str, Any]) -> List[Dict[s
 
     try:
         if not isinstance(tool_result, dict):
+            logger.debug("[SOURCES] tool_result is not a dict")
             return sources
 
         # Navigate MCP JSON-RPC structure: result.structuredContent
         result_content = tool_result.get('result', {})
         structured_content = result_content.get('structuredContent') or result_content.get('structured_content', {})
+
+        logger.debug(f"[SOURCES] structured_content keys: {list(structured_content.keys()) if isinstance(structured_content, dict) else 'not a dict'}")
 
         if not isinstance(structured_content, dict):
             return sources
@@ -154,10 +157,18 @@ def extract_sources_from_tool_result(tool_result: Dict[str, Any]) -> List[Dict[s
         # Fallback: extract from aggregation samples (when group_by + samples_per_bucket is used)
         if not result_array:
             aggregations = structured_content.get('aggregations', {})
-            group_by_results = aggregations.get('group_by', [])
+            group_by_data = aggregations.get('group_by', {})
+
+            # Handle both formats: group_by as list OR group_by.buckets as list
+            if isinstance(group_by_data, list):
+                buckets = group_by_data
+            elif isinstance(group_by_data, dict):
+                buckets = group_by_data.get('buckets', [])
+            else:
+                buckets = []
 
             all_samples = []
-            for bucket in group_by_results:
+            for bucket in buckets:
                 if isinstance(bucket, dict):
                     samples = bucket.get('samples', [])
                     if isinstance(samples, list):
@@ -189,7 +200,11 @@ def extract_sources_from_tool_result(tool_result: Dict[str, Any]) -> List[Dict[s
 
                 for backend_field in backend_fields:
                     if backend_field in match and match[backend_field]:
-                        source[frontend_key] = match[backend_field]
+                        value = match[backend_field]
+                        # Handle array values (e.g., merged documents have url as array)
+                        if isinstance(value, list) and len(value) > 0:
+                            value = value[0]  # Take first value
+                        source[frontend_key] = value
                         break  # Found a value, stop trying fallbacks
 
             # Generate ID from primary_id or secondary_id

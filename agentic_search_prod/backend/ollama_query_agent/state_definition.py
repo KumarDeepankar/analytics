@@ -131,3 +131,8 @@ class SearchAgentState(TypedDict):
     # Iteration control to prevent infinite loops
     current_turn_iteration_count: int
     max_turn_iterations: int
+
+    # Synthesis retry control (for token limit errors)
+    synthesis_retry_count: int  # Number of synthesis retry attempts
+    needs_sample_reduction: bool  # Flag to trigger retry with reduced samples
+    retry_ui_reset: bool  # Signal server to send RETRY_RESET event to frontend

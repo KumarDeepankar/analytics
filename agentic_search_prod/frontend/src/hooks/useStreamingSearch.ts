@@ -16,6 +16,7 @@ export function useStreamingSearch() {
     addProcessingStep,
     addSources,
     addCharts,
+    clearSourcesAndCharts,
     updateStreamingContent,
     setLoading,
     setStreamingMessageId,
@@ -143,6 +144,7 @@ export function useStreamingSearch() {
       addProcessingStep,
       addSources,
       addCharts,
+      clearSourcesAndCharts,
     ]
   );
 
@@ -238,6 +240,13 @@ export function useStreamingSearch() {
               if (charts.length > 0) {
                 addCharts(messageId, charts);
               }
+              break;
+
+            case StreamMarkerType.RETRY_RESET:
+              // Retry with reduced samples - clear sources and charts
+              clearSourcesAndCharts(messageId);
+              sourcesBufferRef.current.clear();  // Clear deduplication buffer
+              addProcessingStep(messageId, 'Retrying with reduced data...');
               break;
 
             case StreamMarkerType.ERROR:

@@ -15,7 +15,8 @@ from .markdown_converter import (
     generate_no_results_markdown
 )
 from .theme_selector import select_theme_smart
-from .error_handler import format_error_for_display
+from .error_handler import format_error_for_display, is_token_limit_error
+from .retry_handler import MAX_SYNTHESIS_RETRIES
 
 logger = logging.getLogger(__name__)
 
@@ -819,11 +820,20 @@ Output: Pure markdown text that will be rendered client-side with beautiful them
         save_conversation_turn(state, final_response.response_content)
 
     except Exception as e:
-        # Single unified fallback for ANY error (gathering OR synthesis)
-        # This replaces the previous duplicate fallback blocks
+        error_str = str(e)
         logger.error(f"Synthesis failed: {e}")
-        # Convert raw error to user-friendly message
-        user_friendly_error = format_error_for_display(str(e))
+
+        # Check if this is a token limit error and we can retry
+        retry_count = state.get("synthesis_retry_count", 0)
+        if is_token_limit_error(error_str) and retry_count < MAX_SYNTHESIS_RETRIES:
+            # Trigger retry with reduced samples
+            state["needs_sample_reduction"] = True
+            state["thinking_steps"].append(f"⚠️ Response too large, will retry with reduced data")
+            logger.info(f"[RETRY] Token limit error, triggering sample reduction (attempt {retry_count + 1})")
+            return state  # Don't set final_response_generated_flag - let graph route to retry
+
+        # Not retryable: use fallback response
+        user_friendly_error = format_error_for_display(error_str)
         state["thinking_steps"].append(f"⚠️ Synthesis failed, generating fallback response")
         state["error_message"] = user_friendly_error
 

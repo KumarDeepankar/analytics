@@ -147,6 +147,14 @@ export class StreamParser {
             timestamp: Date.now(),
           });
           markerFound = true;
+        } else if (line && line.startsWith(StreamMarkerType.RETRY_RESET)) {
+          // Retry with reduced samples - clear sources and charts
+          results.push({
+            type: StreamMarkerType.RETRY_RESET,
+            content: '',
+            timestamp: Date.now(),
+          });
+          markerFound = true;
         } else if (!this.inMarkdownBlock && line) {
           // Raw content line (only if not in markdown block and has content)
           results.push({

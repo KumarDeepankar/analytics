@@ -8,6 +8,7 @@ from .nodes import (
     execute_all_tasks_parallel_node,
     gather_and_synthesize_node
 )
+from .retry_handler import reduce_samples_node, should_retry_with_reduction
 
 
 # --- Conditional Edges ---
@@ -43,9 +44,21 @@ def route_after_plan_creation(state: SearchAgentState) -> str:
     return "__end__"
 
 
-# NOTE: route_after_parallel_execution and route_after_synthesis removed
-# They were redundant - always returned the same value (should use direct edges)
-# Removed as part of Bug #2 and #3 fixes
+# NOTE: route_after_parallel_execution removed - was redundant (always same value)
+# Removed as part of Bug #2 fix
+
+
+def route_after_synthesis(state: SearchAgentState) -> str:
+    """
+    Route after synthesis:
+    - If needs_sample_reduction flag is set → reduce_samples_node (retry path)
+    - Otherwise → END
+
+    This enables retry with reduced samples when token limit is exceeded.
+    """
+    if should_retry_with_reduction(state):
+        return "reduce_samples_node"
+    return "__end__"
 
 
 # --- Graph Definition ---
@@ -57,6 +70,7 @@ workflow.add_node("parallel_initialization_node", parallel_initialization_node)
 workflow.add_node("create_execution_plan_node", create_execution_plan_node)
 workflow.add_node("execute_all_tasks_parallel_node", execute_all_tasks_parallel_node)
 workflow.add_node("gather_and_synthesize_node", gather_and_synthesize_node)
+workflow.add_node("reduce_samples_node", reduce_samples_node)  # Retry with reduced samples
 
 # Define the workflow edges
 # Priority 5: Start with parallel initialization (init + tool discovery together)
@@ -76,8 +90,18 @@ workflow.add_conditional_edges(
 # After parallel execution, ALWAYS go to synthesis (direct edge - Bug #2 fix)
 workflow.add_edge("execute_all_tasks_parallel_node", "gather_and_synthesize_node")
 
-# After synthesis, ALWAYS end (direct edge - Bug #3 fix)
-workflow.add_edge("gather_and_synthesize_node", END)
+# After synthesis, check if retry is needed (token limit error)
+workflow.add_conditional_edges(
+    "gather_and_synthesize_node",
+    route_after_synthesis,
+    {
+        "reduce_samples_node": "reduce_samples_node",
+        "__end__": END
+    }
+)
+
+# After reducing samples, go back to execution for retry
+workflow.add_edge("reduce_samples_node", "execute_all_tasks_parallel_node")
 
 # Compile the agent
 compiled_agent = workflow.compile(checkpointer=checkpointer)

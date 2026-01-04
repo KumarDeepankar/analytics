@@ -92,6 +92,7 @@ export const StreamMarkerType = {
   CHART_CONFIGS: 'CHART_CONFIGS:',
   ERROR: 'ERROR:',
   FINAL_RESPONSE_START: 'FINAL_RESPONSE_START:',
+  RETRY_RESET: 'RETRY_RESET:',  // Clears sources/charts for retry with reduced data
 } as const;
 
 export type StreamMarkerType = typeof StreamMarkerType[keyof typeof StreamMarkerType];
@@ -120,6 +121,7 @@ export type ChatAction =
   | { type: 'ADD_PROCESSING_STEP'; payload: { messageId: string; step: ProcessingStep } }
   | { type: 'ADD_SOURCES'; payload: { messageId: string; sources: Source[] } }
   | { type: 'ADD_CHARTS'; payload: { messageId: string; charts: ChartConfig[] } }
+  | { type: 'CLEAR_SOURCES_AND_CHARTS'; payload: { messageId: string } }  // For retry with reduced data
   | { type: 'SET_LOADING'; payload: boolean }
   | { type: 'SET_STREAMING_MESSAGE_ID'; payload: string | null }
   | { type: 'UPDATE_STREAMING_CONTENT'; payload: { messageId: string; content: string } }

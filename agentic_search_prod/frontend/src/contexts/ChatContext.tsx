@@ -109,6 +109,23 @@ function chatReducer(state: ChatState, action: ChatAction): ChatState {
       };
     }
 
+    case 'CLEAR_SOURCES_AND_CHARTS': {
+      // Clear sources and charts for retry with reduced data
+      const { messageId } = action.payload;
+      return {
+        ...state,
+        messages: state.messages.map((msg) =>
+          msg.id === messageId
+            ? {
+                ...msg,
+                sources: [],
+                charts: [],
+              }
+            : msg
+        ),
+      };
+    }
+
     case 'SET_LOADING':
       return {
         ...state,
@@ -186,6 +203,7 @@ interface ChatContextType {
   addProcessingStep: (messageId: string, content: string) => void;
   addSources: (messageId: string, sources: Source[]) => void;
   addCharts: (messageId: string, charts: ChartConfig[]) => void;
+  clearSourcesAndCharts: (messageId: string) => void;  // For retry with reduced data
   updateStreamingContent: (messageId: string, content: string) => void;
   setLoading: (loading: boolean) => void;
   setStreamingMessageId: (id: string | null) => void;
@@ -231,6 +249,10 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     dispatch({ type: 'ADD_CHARTS', payload: { messageId, charts } });
   };
 
+  const clearSourcesAndCharts = (messageId: string) => {
+    dispatch({ type: 'CLEAR_SOURCES_AND_CHARTS', payload: { messageId } });
+  };
+
   const updateStreamingContent = (messageId: string, content: string) => {
     dispatch({ type: 'UPDATE_STREAMING_CONTENT', payload: { messageId, content } });
   };
@@ -255,6 +277,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     addProcessingStep,
     addSources,
     addCharts,
+    clearSourcesAndCharts,
     updateStreamingContent,
     setLoading,
     setStreamingMessageId,

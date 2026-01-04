@@ -273,7 +273,8 @@ async def search_interaction_stream(
             "parallel_initialization_node",
             "create_execution_plan_node",
             "execute_all_tasks_parallel_node",
-            "gather_and_synthesize_node"
+            "gather_and_synthesize_node",
+            "reduce_samples_node"  # Retry node for token limit errors
         ]
 
         final_response_started = False
@@ -348,6 +349,12 @@ async def search_interaction_stream(
                                 import json
                                 charts_json = json.dumps(chart_configs)
                                 yield f"CHART_CONFIGS:{charts_json}\n"
+                                await asyncio.sleep(0.01)
+
+                        # Send RETRY_RESET when reduce_samples_node triggers a retry
+                        if event_name == "reduce_samples_node":
+                            if node_output.get("retry_ui_reset"):
+                                yield f"RETRY_RESET:\n"
                                 await asyncio.sleep(0.01)
 
                         if node_output.get("final_response_generated_flag") and not final_response_started:

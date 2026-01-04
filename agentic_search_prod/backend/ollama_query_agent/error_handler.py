@@ -184,3 +184,18 @@ def format_error_for_display(error_message: str, include_category: bool = False)
         return f"[{category.value}] {user_message}"
 
     return user_message
+
+
+def is_token_limit_error(error_message: str) -> bool:
+    """
+    Check if an error is due to token/context limit exceeded.
+
+    Used to trigger retry with reduced sample parameters.
+
+    Args:
+        error_message: The raw error message
+
+    Returns:
+        True if error is a token limit error
+    """
+    return categorize_error(error_message) == ErrorCategory.TOKEN_LIMIT

@@ -29,7 +29,7 @@ import os
 from typing import Type, TypeVar, Optional
 import httpx
 from pydantic import BaseModel
-from .error_handler import format_error_for_display
+from .error_handler import format_error_for_display, is_token_limit_error
 
 logger = logging.getLogger(__name__)
 
@@ -203,8 +203,10 @@ class ClaudeClient:
 
         except httpx.HTTPStatusError as e:
             logger.error(f"HTTP error from Claude: {e.response.status_code} - {e.response.text}")
-            # Include response text for better error categorization
             error_detail = f"HTTP {e.response.status_code}: {e.response.text}"
+            # Raise exception for token limit errors so retry logic can catch them
+            if is_token_limit_error(error_detail):
+                raise Exception(error_detail)
             return f"Error: {format_error_for_display(error_detail)}"
         except httpx.ConnectError as e:
             logger.error(f"Connection error to Claude: {e}")
@@ -214,6 +216,9 @@ class ClaudeClient:
             return f"Error: {format_error_for_display('timeout')}"
         except Exception as e:
             logger.error(f"Error generating response from Claude: {e}")
+            # Re-raise token limit errors for retry handling
+            if is_token_limit_error(str(e)):
+                raise
             return f"Error: {format_error_for_display(str(e))}"
 
     async def generate_structured_response(

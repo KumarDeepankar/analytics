@@ -28,7 +28,7 @@ ERROR_PATTERNS = {
     ErrorCategory.TOKEN_LIMIT: [
         r"token[s]?\s*(limit|exceeded|too\s*long)",
         r"maximum\s*context\s*length",
-        r"input\s*too\s*long",
+        r"input\s*(is\s*)?too\s*long",  # Matches "input too long" AND "input is too long"
         r"prompt\s*is\s*too\s*long",
         r"request\s*too\s*large",
         r"max_tokens",

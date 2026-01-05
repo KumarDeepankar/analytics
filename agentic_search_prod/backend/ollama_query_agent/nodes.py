@@ -662,7 +662,6 @@ async def gather_and_synthesize_node(state: SearchAgentState) -> SearchAgentStat
                     "task_number": task.task_number,
                     "tool_name": task.tool_name,
                     "description": task.description,
-                    "arguments": task.tool_arguments,
                     "result": task.result
                 })
                 if task.tool_name not in sources_used:

@@ -92,24 +92,24 @@ def create_multi_task_planning_prompt(
 ## EXAMPLES:
 
 ❌ WRONG (creating fresh query):
-- Previous: `analyze_events(filters='{"country": "India"}', group_by='event_theme')`
+- Previous: `analyze_events(filters='{{"country": "India"}}', group_by='event_theme')`
 - User: "what about 2023?"
-- Wrong: `analyze_events(filters='{"year": 2023}')` ← Missing country filter!
+- Wrong: `analyze_events(filters='{{"year": 2023}}')` ← Missing country filter!
 
 ✅ CORRECT (modifying previous query):
-- Previous: `analyze_events(filters='{"country": "India"}', group_by='event_theme')`
+- Previous: `analyze_events(filters='{{"country": "India"}}', group_by='event_theme')`
 - User: "what about 2023?"
-- Correct: `analyze_events(filters='{"country": "India", "year": 2023}', group_by='event_theme')` ← Added year, kept country
+- Correct: `analyze_events(filters='{{"country": "India", "year": 2023}}', group_by='event_theme')` ← Added year, kept country
 
 ❌ WRONG:
-- Previous: `analyze_events(filters='{"country": "USA"}', group_by='country', top_n=5)`
+- Previous: `analyze_events(filters='{{"country": "USA"}}', group_by='country', top_n=5)`
 - User: "show me more"
 - Wrong: `analyze_events(group_by='country')` ← Lost country filter!
 
 ✅ CORRECT:
-- Previous: `analyze_events(filters='{"country": "USA"}', group_by='country', top_n=5)`
+- Previous: `analyze_events(filters='{{"country": "USA"}}', group_by='country', top_n=5)`
 - User: "show me more"
-- Correct: `analyze_events(filters='{"country": "USA"}', group_by='country', top_n=10)` ← Kept all filters, increased top_n
+- Correct: `analyze_events(filters='{{"country": "USA"}}', group_by='country', top_n=10)` ← Kept all filters, increased top_n
 
 """
 

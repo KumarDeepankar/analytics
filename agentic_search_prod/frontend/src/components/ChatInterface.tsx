@@ -171,7 +171,7 @@ export function ChatInterface() {
   // Listen for tools-unavailable event (fired after conversation turn)
   useEffect(() => {
     const handleToolsUnavailable = async () => {
-      setToolsNotification('No tools available. Attempting to restore connection...');
+      setToolsNotification('Reconnecting to tools...');
 
       // Wait 1.5s so user can see the "attempting" message
       await new Promise(resolve => setTimeout(resolve, 1500));
@@ -183,11 +183,11 @@ export function ChatInterface() {
         setAvailableTools(toolsList);
         setToolsNotification(
           toolsList.length > 0
-            ? 'Tools restored successfully.'
-            : 'Unable to load tools. Please refresh the tool list to ensure tools are available for the agent.'
+            ? 'Tools connected!'
+            : 'Unable to connect to tools. Please refresh the tool list or try again shortly.'
         );
       } catch {
-        setToolsNotification('Unable to load tools. Please refresh the tool list to ensure tools are available for the agent.');
+        setToolsNotification('Unable to connect to tools. Please refresh the tool list or try again shortly.');
       }
       setTimeout(() => setToolsNotification(null), 5000);
     };
@@ -345,9 +345,9 @@ export function ChatInterface() {
             top: '16px',
             left: '50%',
             transform: 'translateX(-50%)',
-            backgroundColor: toolsNotification.includes('restored successfully')
+            backgroundColor: toolsNotification.includes('connected!')
               ? '#4CAF50'  // Green - success
-              : toolsNotification.includes('Attempting')
+              : toolsNotification.includes('Reconnecting')
                 ? '#2196F3'  // Blue - in progress
                 : '#F44336', // Red - error
             color: 'white',

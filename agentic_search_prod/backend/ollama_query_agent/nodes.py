@@ -325,25 +325,18 @@ async def parallel_initialization_node(state: SearchAgentState) -> SearchAgentSt
         )
         init_state["response_theme"] = selected_theme
 
-        # Enhanced thinking steps
+        # Clean thinking steps - only essential messages
         init_steps = [
-            "Initializing Multi-Task Agentic Search",
             f"Query: '{state['input']}'",
         ]
 
         if conversation_was_reset:
-            init_steps.append(f"🔄 New conversation started ({MAX_FOLLOWUP_TURNS} follow-up limit reached)")
+            init_steps.append("🔄 New conversation started")
         elif is_followup:
-            init_steps.append("Followup query detected - loading conversation context")
-            if conversation_history:
-                init_steps.append(f"Found {len(conversation_history)} previous conversation turn(s)")
-                latest = conversation_history[-1]
-                prev_query = latest.get("query", "")
-                init_steps.append(f"💭 Previous query: {prev_query}")
+            init_steps.append("📝 Follow-up query")
         else:
-            init_steps.append("🆕 Fresh search session started")
+            init_steps.append("🆕 Fresh search session")
 
-        init_steps.append("Search session initialized - ready for multi-task planning")
         init_state["thinking_steps"] = init_steps
 
         return init_state
@@ -357,35 +350,20 @@ async def parallel_initialization_node(state: SearchAgentState) -> SearchAgentSt
             "error_message": None
         }
 
-        discover_state["thinking_steps"].append("Connecting to MCP Registry...")
-        discover_state["thinking_steps"].append("Querying available tools from port 8021")
-
         try:
-            discover_state["thinking_steps"].append("Fetching tool definitions...")
             available_tools = await mcp_tool_client.get_available_tools()
             discover_state["available_tools"] = available_tools
 
-            discover_state["thinking_steps"].append(f"Discovered {len(available_tools)} tools from MCP registry")
-
-            if available_tools:
-                tool_names = [tool.get("name", "unknown") for tool in available_tools]
-                discover_state["thinking_steps"].append(
-                    f"🛠️ Available tools: {', '.join(tool_names[:5])}" +
-                    (f" and {len(tool_names) - 5} more..." if len(tool_names) > 5 else "")
-                )
-
             if not discover_state.get("enabled_tools"):
                 discover_state["enabled_tools"] = [tool.get("name", "") for tool in available_tools]
-                discover_state["thinking_steps"].append("No specific tool selection - enabling all available tools")
-            else:
-                discover_state["thinking_steps"].append(f"User-selected tools: {', '.join(discover_state['enabled_tools'])}")
 
-            discover_state["thinking_steps"].append("Tool discovery completed successfully")
+            # Only show selected tools
+            if discover_state["enabled_tools"]:
+                discover_state["thinking_steps"].append(f"🛠️ Tools selected: {', '.join(discover_state['enabled_tools'])}")
 
         except Exception as e:
             logger.error(f"Error discovering tools: {e}")
-            discover_state["thinking_steps"].append(f"❌ Tool discovery failed: {str(e)}")
-            discover_state["thinking_steps"].append("Continuing with empty tool set")
+            discover_state["thinking_steps"].append(f"❌ Tool discovery failed")
             discover_state["error_message"] = f"Failed to discover tools: {str(e)}"
             discover_state["available_tools"] = []
             discover_state["enabled_tools"] = []
@@ -416,9 +394,6 @@ async def create_execution_plan_node(state: SearchAgentState) -> SearchAgentStat
     """Create a multi-task execution plan using structured output"""
     logger.info("Creating multi-task execution plan")
 
-    state["thinking_steps"].append("Creating Multi-Task Execution Plan")
-    state["thinking_steps"].append("Analyzing query to identify required tasks")
-
     try:
         # Filter to only enabled tools
         enabled_tool_names = state.get("enabled_tools", [])
@@ -442,8 +417,6 @@ async def create_execution_plan_node(state: SearchAgentState) -> SearchAgentStat
         print(prompt)
         print("="*80 + "\n")
 
-        state["thinking_steps"].append("🤖 Consulting AI for task planning...")
-
         # Minimal system prompt - all instructions are in user prompt (from prompts.py)
         system_prompt = "You are a planning agent. Follow the instructions in the user prompt exactly."
 
@@ -460,8 +433,6 @@ async def create_execution_plan_node(state: SearchAgentState) -> SearchAgentStat
                 system_prompt=system_prompt
             )
 
-            state["thinking_steps"].append(f"✅ Planning decision: {planning_decision.decision_type}")
-            state["thinking_steps"].append(f"Reasoning: {planning_decision.reasoning[:150]}...")
             logger.info(f"✓ Planning decision: {planning_decision.decision_type}")
 
         except (ValueError, Exception) as e:
@@ -469,8 +440,6 @@ async def create_execution_plan_node(state: SearchAgentState) -> SearchAgentStat
             # Exception = Other LLM errors
             error_type = "contract violation" if isinstance(e, ValueError) else "LLM error"
             logger.error(f"Planning failed ({error_type}): {e}")
-            state["thinking_steps"].append(f"⚠ Planning failed ({error_type}), creating fallback plan")
-            state["thinking_steps"].append(f"  Error: {str(e)[:100]}")
 
             # Create a simple fallback plan with one tool call
             enabled_tool_names = state.get("enabled_tools", [])
@@ -494,13 +463,10 @@ async def create_execution_plan_node(state: SearchAgentState) -> SearchAgentStat
         # Handle the two decision paths
         if planning_decision.decision_type == DecisionType.RESPOND_DIRECTLY:
             # FAST PATH: Direct response generated in planning phase (1 LLM call total)
-            state["thinking_steps"].append("⚡ Direct response path - no tool execution needed")
-
             # Validate that content is not None (LLM should provide content for direct responses)
             if not planning_decision.content:
                 logger.error("LLM returned RESPOND_DIRECTLY but content is None")
                 state["error_message"] = "Planning returned direct response without content"
-                state["thinking_steps"].append("❌ Invalid LLM response: no content provided")
             else:
                 # Create FinalResponse directly
                 final_response = FinalResponse(
@@ -517,8 +483,7 @@ async def create_execution_plan_node(state: SearchAgentState) -> SearchAgentStat
 
                 # No execution plan needed
                 state["execution_plan"] = None
-
-                state["thinking_steps"].append("✅ Response generated and saved to history")
+                state["thinking_steps"].append("✅ Final response generated")
                 logger.info(f"✓ Direct response generated: {len(planning_decision.content)} chars")
 
         else:  # decision_type == "execute_plan"
@@ -552,19 +517,17 @@ async def create_execution_plan_node(state: SearchAgentState) -> SearchAgentStat
             state["execution_plan"] = execution_plan
             state["current_task_index"] = 0
 
-            state["thinking_steps"].append(f"📋 Created execution plan with {len(tasks)} tool calls")
-            state["thinking_steps"].append(f"Plan reasoning: {planning_decision.reasoning}")
+            # Show plan with reasoning and tool parameters
+            state["thinking_steps"].append(f"📋 Plan: {planning_decision.reasoning}")
 
             for i, task in enumerate(tasks):
-                # Format arguments in a readable way
                 args_str = ", ".join([f"{k}={repr(v)}" for k, v in task.tool_arguments.items()])
-                state["thinking_steps"].append(f"  Tool {i + 1}: {task.tool_name}({args_str})")
+                state["thinking_steps"].append(f"   Tool {i + 1}: {task.tool_name}({args_str})")
 
     except Exception as e:
         logger.error(f"Error creating execution plan: {e}")
         # Convert raw error to user-friendly message
         user_friendly_error = format_error_for_display(str(e))
-        state["thinking_steps"].append(f"❌ Failed to create plan: {str(e)}")
         state["error_message"] = user_friendly_error
 
     # Validation: Ensure node produced valid output before returning
@@ -578,7 +541,6 @@ async def create_execution_plan_node(state: SearchAgentState) -> SearchAgentStat
         # This should never happen, but if it does, we need to set an error
         logger.error("Planning node produced invalid state: no response, plan, or error")
         state["error_message"] = "Planning failed to create execution plan or direct response"
-        state["thinking_steps"].append("⚠️ Planning validation failed: no output produced")
 
     return state
 
@@ -592,15 +554,11 @@ async def execute_all_tasks_parallel_node(state: SearchAgentState) -> SearchAgen
     # This should never happen with new routing, but handle gracefully
     if not execution_plan or not execution_plan.tasks:
         logger.warning("execute_all_tasks_parallel_node called with no tasks - routing issue")
-        state["thinking_steps"].append("⚠️ No tasks to execute (routing issue detected)")
         # Don't set error - just return to allow graceful handling
         return state
 
     tasks = execution_plan.tasks
     total_tasks = len(tasks)
-
-    state["thinking_steps"].append(f"Starting parallel execution of {total_tasks} tasks")
-    state["thinking_steps"].append(f"Tasks will execute concurrently for faster results")
 
     async def execute_single_task(task: Task, task_index: int) -> tuple[int, Task]:
         """Execute a single task and return its index and updated task"""
@@ -633,8 +591,6 @@ async def execute_all_tasks_parallel_node(state: SearchAgentState) -> SearchAgen
     ]
 
     # Execute all tasks in parallel using asyncio.gather
-    state["thinking_steps"].append(f"Executing {total_tasks} tasks concurrently...")
-
     try:
         # Use asyncio.gather to run all tasks in parallel
         results = await asyncio.gather(*task_coroutines, return_exceptions=True)
@@ -656,19 +612,6 @@ async def execute_all_tasks_parallel_node(state: SearchAgentState) -> SearchAgen
                 if updated_task.status == "completed":
                     completed_count += 1
 
-                    # 1. Tool call with ALL parameters (multi-line format)
-                    param_lines = [f"   {k}: {v}" for k, v in updated_task.tool_arguments.items()]
-                    params_display = "\n".join(param_lines) if param_lines else "   (no parameters)"
-                    state["thinking_steps"].append(f"🔧 {updated_task.tool_name}\n{params_display}")
-
-                    # 2. Response summary with key info (multi-line format)
-                    result_str = str(updated_task.result)
-                    if len(result_str) > 200:
-                        preview = result_str[:200] + "..."
-                        state["thinking_steps"].append(f"✓ Response received\n   Preview: {preview}")
-                    else:
-                        state["thinking_steps"].append(f"✓ Response received\n   {result_str}")
-
                     # Extract sources (URLs, RIDs, DocIDs) from tool result
                     sources = extract_sources_from_tool_result(updated_task.result)
                     if sources:
@@ -680,12 +623,9 @@ async def execute_all_tasks_parallel_node(state: SearchAgentState) -> SearchAgen
                         state["chart_configs"].extend(chart_configs)
                 else:
                     failed_count += 1
-                    param_lines = [f"   {k}: {v}" for k, v in updated_task.tool_arguments.items()]
-                    params_display = "\n".join(param_lines) if param_lines else "   (no parameters)"
-                    state["thinking_steps"].append(f"❌ {updated_task.tool_name} - Failed\n{params_display}")
 
-        state["thinking_steps"].append(f"✨ Parallel execution complete!")
-        state["thinking_steps"].append(f"📊 Results: {completed_count} completed, {failed_count} failed")
+        # Show execution summary
+        state["thinking_steps"].append(f"🔧 Executed {completed_count}/{total_tasks} tools")
 
         # Update current_task_index to indicate all tasks processed
         state["current_task_index"] = total_tasks
@@ -697,7 +637,6 @@ async def execute_all_tasks_parallel_node(state: SearchAgentState) -> SearchAgen
         logger.error(f"Error in parallel execution: {e}")
         # Convert raw error to user-friendly message
         user_friendly_error = format_error_for_display(str(e))
-        state["thinking_steps"].append(f"❌ Parallel execution error: {str(e)}")
         state["error_message"] = user_friendly_error
 
     return state
@@ -706,9 +645,6 @@ async def execute_all_tasks_parallel_node(state: SearchAgentState) -> SearchAgen
 async def gather_and_synthesize_node(state: SearchAgentState) -> SearchAgentState:
     """Gather all task results and synthesize into final response"""
     logger.info("Gathering information and synthesizing response")
-
-    state["thinking_steps"].append("Information Synthesis Phase")
-    state["thinking_steps"].append("Gathering results from all completed tasks")
 
     try:
         execution_plan = state.get("execution_plan")
@@ -738,11 +674,6 @@ async def gather_and_synthesize_node(state: SearchAgentState) -> SearchAgentStat
         )
 
         state["gathered_information"] = gathered_info
-        state["thinking_steps"].append(f"Gathered results from {len(task_results)} completed tasks")
-        state["thinking_steps"].append(f"Sources used: {', '.join(sources_used)}")
-
-        # Now synthesize the information
-        state["thinking_steps"].append("Synthesizing information into comprehensive response...")
 
         # Prepare gathered information for synthesis
         synthesis_data = {
@@ -802,7 +733,6 @@ Output: Pure markdown text that will be rendered client-side with beautiful them
             system_prompt=system_prompt
         )
 
-        state["thinking_steps"].append("✅ Received markdown response from LLM")
         logger.info(f"✓ Markdown generation successful: {len(markdown_response)} chars")
 
         # Create FinalResponse with markdown content
@@ -814,7 +744,7 @@ Output: Pure markdown text that will be rendered client-side with beautiful them
 
         state["final_response"] = final_response
         state["final_response_generated_flag"] = True
-        state["thinking_steps"].append("Final response generated successfully")
+        state["thinking_steps"].append("✅ Final response generated")
 
         # Save conversation history (save markdown)
         save_conversation_turn(state, final_response.response_content)
@@ -828,13 +758,11 @@ Output: Pure markdown text that will be rendered client-side with beautiful them
         if is_token_limit_error(error_str) and retry_count < MAX_SYNTHESIS_RETRIES:
             # Trigger retry with reduced samples
             state["needs_sample_reduction"] = True
-            state["thinking_steps"].append(f"⚠️ Response too large, will retry with reduced data")
             logger.info(f"[RETRY] Token limit error, triggering sample reduction (attempt {retry_count + 1})")
             return state  # Don't set final_response_generated_flag - let graph route to retry
 
         # Not retryable: use fallback response
         user_friendly_error = format_error_for_display(error_str)
-        state["thinking_steps"].append(f"⚠️ Synthesis failed, generating fallback response")
         state["error_message"] = user_friendly_error
 
         # Prefer showing actual data if available, rather than generic "no results"
@@ -856,7 +784,7 @@ Output: Pure markdown text that will be rendered client-side with beautiful them
         state["final_response"] = final_response
         state["final_response_generated_flag"] = True
         save_conversation_turn(state, fallback_markdown)
-        state["thinking_steps"].append("✅ Fallback response generated")
+        state["thinking_steps"].append("✅ Final response generated")
         logger.info(f"[FALLBACK] Generated {len(fallback_markdown)} chars of fallback markdown")
 
     return state

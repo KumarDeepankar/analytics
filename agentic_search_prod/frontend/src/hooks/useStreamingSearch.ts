@@ -127,6 +127,17 @@ export function useStreamingSearch() {
         setLoading(false);
         setStreamingMessageId(null);
         parserRef.current?.reset();
+
+        // Check tools after conversation turn - notify if connection lost
+        try {
+          await apiClient.refreshTools();
+          const tools = await apiClient.getTools();
+          if (!tools || tools.length === 0) {
+            window.dispatchEvent(new CustomEvent('tools-unavailable'));
+          }
+        } catch {
+          window.dispatchEvent(new CustomEvent('tools-unavailable'));
+        }
       }
     },
     [

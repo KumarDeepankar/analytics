@@ -25,6 +25,7 @@ export function ChatInterface() {
   const [toolsLoading, setToolsLoading] = useState(true);
   const [showModelDropdown, setShowModelDropdown] = useState(false);
   const [showToolsDropdown, setShowToolsDropdown] = useState(false);
+  const [toolsNotification, setToolsNotification] = useState<string | null>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const toolsDropdownRef = useRef<HTMLDivElement>(null);
 
@@ -123,17 +124,76 @@ export function ChatInterface() {
     async function loadTools() {
       try {
         const tools = await apiClient.getTools();
-        setAvailableTools(Array.isArray(tools) ? tools : []);
+        const toolsList = Array.isArray(tools) ? tools : [];
+        setAvailableTools(toolsList);
+        // Notify if tools empty on initial load
+        if (toolsList.length === 0) {
+          window.dispatchEvent(new CustomEvent('tools-unavailable'));
+        }
       } catch (error) {
-
         setAvailableTools([]);
+        window.dispatchEvent(new CustomEvent('tools-unavailable'));
       } finally {
-
         setToolsLoading(false);
       }
     }
-
     loadTools();
+  }, []);
+
+  // Polling every 30 seconds + tab visibility refresh (notify if tools empty)
+  useEffect(() => {
+    const checkTools = async () => {
+      try {
+        await apiClient.refreshTools();
+        const tools = await apiClient.getTools();
+        const toolsList = Array.isArray(tools) ? tools : [];
+        setAvailableTools(toolsList);
+        if (toolsList.length === 0) {
+          window.dispatchEvent(new CustomEvent('tools-unavailable'));
+        }
+      } catch {
+        window.dispatchEvent(new CustomEvent('tools-unavailable'));
+      }
+    };
+
+    const interval = setInterval(checkTools, 30000);
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') checkTools();
+    };
+    document.addEventListener('visibilitychange', handleVisibility);
+
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener('visibilitychange', handleVisibility);
+    };
+  }, []);
+
+  // Listen for tools-unavailable event (fired after conversation turn)
+  useEffect(() => {
+    const handleToolsUnavailable = async () => {
+      setToolsNotification('No tools available. Attempting to restore connection...');
+
+      // Wait 1.5s so user can see the "attempting" message
+      await new Promise(resolve => setTimeout(resolve, 1500));
+
+      try {
+        await apiClient.refreshTools();
+        const tools = await apiClient.getTools();
+        const toolsList = Array.isArray(tools) ? tools : [];
+        setAvailableTools(toolsList);
+        setToolsNotification(
+          toolsList.length > 0
+            ? 'Tools restored successfully.'
+            : 'Unable to load tools. Please refresh the tool list to ensure tools are available for the agent.'
+        );
+      } catch {
+        setToolsNotification('Unable to load tools. Please refresh the tool list to ensure tools are available for the agent.');
+      }
+      setTimeout(() => setToolsNotification(null), 5000);
+    };
+
+    window.addEventListener('tools-unavailable', handleToolsUnavailable);
+    return () => window.removeEventListener('tools-unavailable', handleToolsUnavailable);
   }, []);
 
   // Debug log for tools state
@@ -277,6 +337,32 @@ export function ChatInterface() {
         fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif',
       }}
     >
+      {/* Tools notification toast */}
+      {toolsNotification && (
+        <div
+          style={{
+            position: 'fixed',
+            top: '16px',
+            left: '50%',
+            transform: 'translateX(-50%)',
+            backgroundColor: toolsNotification.includes('restored successfully')
+              ? '#4CAF50'  // Green - success
+              : toolsNotification.includes('Attempting')
+                ? '#2196F3'  // Blue - in progress
+                : '#F44336', // Red - error
+            color: 'white',
+            padding: '10px 20px',
+            borderRadius: '8px',
+            fontSize: '13px',
+            fontWeight: '500',
+            zIndex: 9999,
+            boxShadow: '0 4px 12px rgba(0,0,0,0.25)',
+          }}
+        >
+          {toolsNotification}
+        </div>
+      )}
+
       {/* Left sidebar - New conversation & Logout */}
       <div
         style={{
@@ -328,7 +414,21 @@ export function ChatInterface() {
               New
             </div>
             <button
-              onClick={() => window.location.reload()}
+              onClick={async () => {
+                // Check tools before new conversation - notify if empty
+                try {
+                  await apiClient.refreshTools();
+                  const tools = await apiClient.getTools();
+                  if (!tools || tools.length === 0) {
+                    window.dispatchEvent(new CustomEvent('tools-unavailable'));
+                    return; // Don't reload, let user see notification
+                  }
+                } catch {
+                  window.dispatchEvent(new CustomEvent('tools-unavailable'));
+                  return;
+                }
+                window.location.reload();
+              }}
               title="New Conversation"
               style={{
                 width: '40px',

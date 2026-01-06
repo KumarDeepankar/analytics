@@ -768,7 +768,7 @@ class DiscoveryService:
 
         return False
 
-    def _get_adaptive_timeout(self, server_url: str, default_timeout: float = 10.0) -> float:
+    def _get_adaptive_timeout(self, server_url: str, default_timeout: float = 50.0) -> float:
         """
         Get adaptive timeout based on server health.
         Healthy servers get full timeout, unhealthy servers get reduced timeout.
@@ -780,8 +780,8 @@ class DiscoveryService:
 
         # Reduce timeout for servers with recent failures
         if health.consecutive_failures > 0:
-            # 2 seconds for servers with failures, to fail fast
-            return 2.0
+            # 5 seconds for servers with failures (increased from 2s)
+            return 5.0
 
         return default_timeout
 

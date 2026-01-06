@@ -1,0 +1,1511 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MCP Server Management Portal</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <link href="static/css/mcp-portal.css?v=9" rel="stylesheet">
+    <link href="static/css/oauth-forms.css?v=9" rel="stylesheet">
+</head>
+<body>
+    <!-- Page Header -->
+    <header class="page-header">
+        <img src="/static/images/logo.png" alt="Logo" class="logo">
+        <div class="title-container">
+            <h1>MCP Server Management Portal</h1>
+        </div>
+        <div class="nav-buttons" id="headerButtons">
+            <button class="btn btn-primary btn-sm" onclick="showLoginModal()" id="loginButton">
+                <i class="fas fa-sign-in-alt"></i> Sign In
+            </button>
+            <div id="userProfileButton" style="display: none; cursor: pointer;" onclick="toggleUserProfile()">
+                <div style="display: flex; align-items: center; padding: 0.5rem 1rem; background: var(--secondary-bg); border: 1px solid var(--border-color); border-radius: 0.375rem; transition: all 250ms cubic-bezier(0.4, 0, 0.2, 1);" onmouseover="this.style.background='var(--accent-primary)';this.style.borderColor='var(--accent-primary)';this.style.color='white';" onmouseout="this.style.background='var(--secondary-bg)';this.style.borderColor='var(--border-color)';this.style.color='var(--text-primary)';">
+                    <div style="width: 32px; height: 32px; border-radius: 50%; background: var(--accent-primary); display: flex; align-items: center; justify-content: center; font-weight: 600; margin-right: 10px; color: white; font-size: 0.875rem;">
+                        <span id="headerUserInitials"></span>
+                    </div>
+                    <div style="text-align: left;">
+                        <div id="headerUserName" style="font-weight: 600; font-size: 0.8125rem; color: var(--text-primary);"></div>
+                        <div id="headerUserRole" style="font-size: 0.75rem; color: var(--text-secondary);"></div>
+                    </div>
+                    <i class="fas fa-chevron-down" style="margin-left: 12px; font-size: 0.75rem; color: var(--text-muted);"></i>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <div class="app-container">
+        <!-- Sidebar -->
+        <div class="sidebar">
+            <div class="sidebar-header">
+                <div class="sidebar-title">MCP Portal</div>
+                <div class="sidebar-subtitle">Server Management</div>
+            </div>
+            
+            <ul class="nav-menu">
+                <li class="nav-item">
+                    <a class="nav-link active" data-tab="servers">
+                        <i class="fas fa-server"></i>
+                        Servers
+                    </a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link" data-tab="tools">
+                        <i class="fas fa-tools"></i>
+                        Tool Discovery
+                    </a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link" data-tab="capabilities">
+                        <i class="fas fa-brain"></i>
+                        Tool Capabilities
+                    </a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link" data-tab="testing">
+                        <i class="fas fa-flask"></i>
+                        Testing
+                    </a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link" data-tab="configuration">
+                        <i class="fas fa-cog"></i>
+                        Configuration
+                    </a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link" data-tab="oauth">
+                        <i class="fas fa-shield-alt"></i>
+                        OAuth Providers
+                    </a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link" data-tab="users">
+                        <i class="fas fa-users"></i>
+                        Users & Roles
+                    </a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link" data-tab="audit">
+                        <i class="fas fa-clipboard-list"></i>
+                        Audit Logs
+                    </a>
+                </li>
+            </ul>
+        </div>
+
+        <!-- Main Content -->
+        <div class="main-content">
+            <!-- Header -->
+            <div class="header">
+                <div class="header-title">MCP Servers</div>
+                <div class="header-actions">
+                    <button class="btn btn-outline btn-sm" onclick="refreshAll()">
+                        <i class="fas fa-sync"></i>
+                        Refresh
+                    </button>
+                    <button class="btn btn-primary btn-sm" onclick="showAddServerModal()">
+                        <i class="fas fa-plus"></i>
+                        Add Server
+                    </button>
+                </div>
+            </div>
+
+            <!-- Content Area -->
+            <div class="content-area">
+                <!-- Servers Tab -->
+                <div id="servers" class="tab-content active">
+                    <div class="toolbar">
+                        <div class="toolbar-left">
+                            <div class="search-box">
+                                <input type="text" class="search-input" id="serverSearch" placeholder="Search servers..." onkeyup="filterServers()">
+                                <i class="fas fa-search search-icon"></i>
+                            </div>
+                        </div>
+                        <div class="toolbar-right">
+                            <div class="filter-dropdown">
+                                <select class="filter-select" id="statusFilter" onchange="filterServers()">
+                                    <option value="">All Status</option>
+                                    <option value="online">Online</option>
+                                    <option value="offline">Offline</option>
+                                    <option value="pending">Pending</option>
+                                </select>
+                            </div>
+                            <button class="btn btn-outline btn-sm" onclick="bulkDeleteServers()">
+                                <i class="fas fa-trash"></i>
+                                Delete Selected
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="servers-table">
+                        <div class="table-header">
+                            <div class="col-checkbox">
+                                <input type="checkbox" id="selectAll" onchange="toggleSelectAll()">
+                            </div>
+                            <div class="col-status">Status</div>
+                            <div class="col-name">Server</div>
+                            <div class="col-endpoint">Endpoint</div>
+                            <div class="col-capabilities">Capabilities</div>
+                            <div class="col-version">Protocol</div>
+                            <div class="col-actions">Actions</div>
+                        </div>
+                        <div class="table-body" id="serversTableBody">
+                            <div class="loading">Loading servers...</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Tools Tab -->
+                <div id="tools" class="tab-content">
+                    <div class="toolbar">
+                        <div class="toolbar-left">
+                            <div class="search-box">
+                                <input type="text" class="search-input" id="toolSearch" placeholder="Search tools..." onkeyup="filterTools()">
+                                <i class="fas fa-search search-icon"></i>
+                            </div>
+                        </div>
+                        <div class="toolbar-right">
+                            <button class="btn btn-outline btn-sm" onclick="discoverTools()">
+                                <i class="fas fa-sync"></i>
+                                Refresh Tools
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="servers-table">
+                        <div class="table-header">
+                            <div class="col-name">Tool</div>
+                            <div class="col-endpoint">Description</div>
+                            <div class="col-capabilities">Parameters</div>
+                            <div class="col-version">Access Role</div>
+                            <div class="col-actions">Actions</div>
+                        </div>
+                        <div class="table-body" id="toolsTableBody">
+                            <div class="loading">Click "Refresh Tools" to discover available tools...</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Tool Capabilities Tab -->
+                <div id="capabilities" class="tab-content">
+                    <div class="toolbar">
+                        <div class="toolbar-left">
+                            <div class="search-box">
+                                <input type="text" class="search-input" id="capabilitySearch" placeholder="Search capabilities..." onkeyup="filterCapabilities()">
+                                <i class="fas fa-search search-icon"></i>
+                            </div>
+                        </div>
+                        <div class="toolbar-right">
+                            <button class="btn btn-outline btn-sm" onclick="loadCapabilities()">
+                                <i class="fas fa-sync"></i>
+                                Refresh Capabilities
+                            </button>
+                            <button class="btn btn-outline btn-sm" onclick="exportCapabilities()">
+                                <i class="fas fa-download"></i>
+                                Export JSON
+                            </button>
+                        </div>
+                    </div>
+
+                    <div id="capabilitiesContainer" class="capabilities-container">
+                        <div class="loading">Click "Refresh Capabilities" to load tool capabilities...</div>
+                    </div>
+                </div>
+
+                <!-- Testing Tab -->
+                <div id="testing" class="tab-content">
+                    <!-- Tool Execution Test -->
+                    <div class="test-panel">
+                        <div class="test-panel-header">
+                            <div class="panel-title">Tool Execution Test</div>
+                            <div id="executionStatus" class="test-status pending">Ready</div>
+                        </div>
+                        <div class="test-panel-body">
+                            <div class="form-row">
+                                <div class="form-group">
+                                    <label class="form-label">Select Tool</label>
+                                    <select class="form-control" id="testToolSelect">
+                                        <option value="">Select a tool...</option>
+                                    </select>
+                                </div>
+                            </div>
+                            <div id="toolParameters"></div>
+                            <div class="form-group">
+                                <button class="btn btn-primary" onclick="executeTool()" disabled id="executeToolBtn">
+                                    <i class="fas fa-play"></i>
+                                    Execute Tool
+                                </button>
+                            </div>
+                            <div id="testResults" class="test-results" style="display: none;"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- OAuth Providers Tab -->
+                <div id="oauth" class="tab-content">
+                    <div class="test-panel">
+                        <div class="test-panel-header">
+                            <div class="panel-title">
+                                <i class="fas fa-shield-alt"></i>
+                                OAuth 2.1 Provider Management
+                            </div>
+                        </div>
+                        <div class="test-panel-body">
+                            <div id="oauthProvidersContainer"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Users & Roles Tab -->
+                <div id="users" class="tab-content">
+                    <!-- AD Configuration Panel -->
+                    <div class="test-panel">
+                        <div class="test-panel-header">
+                            <div class="panel-title">
+                                <i class="fas fa-server"></i>
+                                Active Directory Configuration
+                            </div>
+                        </div>
+                        <div class="test-panel-body">
+                            <div class="alert alert-info">
+                                <i class="fas fa-info-circle"></i>
+                                <strong>AD Integration</strong>
+                                <p>Configure Active Directory connection for automated user synchronization and group-based role assignment.</p>
+                            </div>
+
+                            <form id="adConfigForm">
+                                <div class="form-row">
+                                    <div class="form-group">
+                                        <label class="form-label">AD Server *</label>
+                                        <input type="text" class="form-control" id="adConfigServer" placeholder="dc.example.com or 192.168.1.10">
+                                        <small class="form-text">Active Directory server hostname or IP</small>
+                                    </div>
+                                    <div class="form-group">
+                                        <label class="form-label">Port</label>
+                                        <input type="number" class="form-control" id="adConfigPort" value="389" placeholder="389">
+                                        <small class="form-text">389 for LDAP, 636 for LDAPS</small>
+                                    </div>
+                                </div>
+
+                                <div class="form-row">
+                                    <div class="form-group">
+                                        <label class="form-label">Base DN *</label>
+                                        <input type="text" class="form-control" id="adConfigBaseDN" placeholder="DC=example,DC=com">
+                                        <small class="form-text">Base Distinguished Name for searches</small>
+                                    </div>
+                                    <div class="form-group">
+                                        <label class="form-label">
+                                            <input type="checkbox" id="adConfigUseSSL">
+                                            Use SSL/TLS
+                                        </label>
+                                        <small class="form-text" style="display: block; margin-top: 8px;">Enable secure LDAP connection</small>
+                                    </div>
+                                </div>
+
+                                <div class="form-row">
+                                    <div class="form-group">
+                                        <label class="form-label">Bind DN *</label>
+                                        <input type="text" class="form-control" id="adConfigBindDN" placeholder="CN=Service Account,OU=Users,DC=example,DC=com">
+                                        <small class="form-text">Service account Distinguished Name</small>
+                                    </div>
+                                    <div class="form-group">
+                                        <label class="form-label">Password *</label>
+                                        <input type="password" class="form-control" id="adConfigPassword">
+                                        <small class="form-text">Service account password (encrypted at rest)</small>
+                                    </div>
+                                </div>
+
+                                <div class="form-group">
+                                    <label class="form-label">Group Search Filter</label>
+                                    <input type="text" class="form-control" id="adConfigGroupFilter" value="(objectClass=group)" placeholder="(objectClass=group)">
+                                    <small class="form-text">LDAP filter to find groups</small>
+                                </div>
+
+                                <div class="form-group">
+                                    <button type="button" class="btn btn-primary" onclick="testADConnection()">
+                                        <i class="fas fa-check-circle"></i> Test Connection
+                                    </button>
+                                    <button type="button" class="btn btn-success" onclick="saveADConfig()">
+                                        <i class="fas fa-save"></i> Save Configuration
+                                    </button>
+                                    <button type="button" class="btn btn-outline" onclick="queryADGroupsFromConfig()">
+                                        <i class="fas fa-user-plus"></i> Add AD Users
+                                    </button>
+                                </div>
+
+                                <div id="adConfigStatus" style="margin-top: 15px;"></div>
+                            </form>
+
+                            <!-- AD Group Mappings Display -->
+                            <div class="form-divider"></div>
+                            <h4 class="form-section-title">
+                                <i class="fas fa-link"></i>
+                                Active Group Mappings
+                            </h4>
+                            <div id="adMappingsContainer">
+                                <p class="text-muted">No AD group mappings configured. Query groups and map them to roles.</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Fetched AD Groups & Users Panel -->
+                    <div class="test-panel">
+                        <div class="test-panel-header">
+                            <div class="panel-title">
+                                <i class="fas fa-users-cog"></i>
+                                Fetched AD Groups & Users
+                            </div>
+                            <button class="btn btn-sm btn-outline" onclick="refreshFetchedADData()">
+                                <i class="fas fa-sync"></i> Refresh
+                            </button>
+                        </div>
+                        <div class="test-panel-body">
+                            <div class="alert alert-info">
+                                <i class="fas fa-info-circle"></i>
+                                <strong>Local Storage</strong>
+                                <p>Groups and users fetched from AD are stored locally for authorization management. Click on any group to view its members.</p>
+                            </div>
+                            <div id="fetchedADContainer">
+                                <p class="text-muted">No AD data fetched yet. Use "Query Groups" in AD Configuration to fetch groups and users.</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- User Management Panel -->
+                    <div class="test-panel">
+                        <div class="test-panel-header">
+                            <div class="panel-title">
+                                <i class="fas fa-users"></i>
+                                User Management (RBAC)
+                            </div>
+                        </div>
+                        <div class="test-panel-body">
+                            <div id="usersContainer"></div>
+                        </div>
+                    </div>
+
+                    <!-- Role Management Panel -->
+                    <div class="test-panel">
+                        <div class="test-panel-header">
+                            <div class="panel-title">
+                                <i class="fas fa-user-shield"></i>
+                                Role Management
+                            </div>
+                        </div>
+                        <div class="test-panel-body">
+                            <div id="rolesContainer"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Audit Logs Tab -->
+                <div id="audit" class="tab-content">
+                    <div class="test-panel">
+                        <div class="test-panel-header">
+                            <div class="panel-title">
+                                <i class="fas fa-chart-bar"></i>
+                                Audit Statistics (24 hours)
+                            </div>
+                        </div>
+                        <div class="test-panel-body">
+                            <div id="auditStatsContainer"></div>
+                        </div>
+                    </div>
+
+                    <div class="test-panel" style="margin-top: 20px;">
+                        <div class="test-panel-header">
+                            <div class="panel-title">
+                                <i class="fas fa-clipboard-list"></i>
+                                Recent Audit Events
+                            </div>
+                            <button class="btn btn-sm btn-outline" onclick="loadAuditLogs()">
+                                <i class="fas fa-sync"></i>
+                                Refresh
+                            </button>
+                        </div>
+                        <div class="test-panel-body">
+                            <div id="auditLogsContainer"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Configuration Tab -->
+                <div id="configuration" class="tab-content">
+                    <!-- System Configuration -->
+                    <div class="test-panel">
+                        <div class="test-panel-header">
+                            <div class="panel-title">
+                                <i class="fas fa-cogs"></i>
+                                System Configuration
+                            </div>
+                            <div id="systemConfigStatus" class="test-status pending">Not Loaded</div>
+                        </div>
+                        <div class="test-panel-body">
+                            <div class="alert alert-info" style="margin-bottom: 20px;">
+                                <i class="fas fa-info-circle"></i>
+                                <strong>Centralized Configuration</strong>
+                                <p>All settings are stored in the database. Registered services fetch public keys from JWKS endpoint for token validation - no shared secrets.</p>
+                            </div>
+
+                            <!-- JWT Configuration -->
+                            <h4 class="form-section-title">
+                                <i class="fas fa-key"></i>
+                                JWT Authentication Settings (RS256/JWKS)
+                            </h4>
+                            <div class="alert alert-success" style="margin-bottom: 20px;">
+                                <i class="fas fa-shield-alt"></i>
+                                <strong>Industry Standard Authentication</strong>
+                                <p>Using RS256 asymmetric keys with JWKS endpoint (RFC 7517). No shared secrets - services validate tokens using public keys.</p>
+                            </div>
+                            <div class="form-row">
+                                <div class="form-group">
+                                    <label class="form-label">RSA Key ID (kid)</label>
+                                    <input type="text" class="form-control" id="jwtKeyId" placeholder="Key ID" readonly style="background-color: #f5f5f5;">
+                                    <small class="form-text">Unique identifier for key rotation (auto-generated)</small>
+                                </div>
+                                <div class="form-group">
+                                    <label class="form-label">Algorithm</label>
+                                    <input type="text" class="form-control" value="RS256" readonly style="background-color: #f5f5f5;">
+                                    <small class="form-text">RSA Signature with SHA-256 (asymmetric)</small>
+                                </div>
+                            </div>
+                            <div class="form-row">
+                                <div class="form-group">
+                                    <label class="form-label">Token Expiry (minutes)</label>
+                                    <input type="number" class="form-control" id="jwtExpiryMinutes" min="5" value="480">
+                                    <small class="form-text">How long tokens remain valid</small>
+                                </div>
+                                <div class="form-group">
+                                    <label class="form-label">JWKS Endpoint</label>
+                                    <div style="display: flex; gap: 8px;">
+                                        <input type="text" class="form-control" value="/.well-known/jwks.json" readonly style="background-color: #f5f5f5; flex: 1;">
+                                        <button class="btn btn-sm btn-outline" onclick="window.open('/.well-known/jwks.json', '_blank')">
+                                            <i class="fas fa-external-link-alt"></i> View
+                                        </button>
+                                    </div>
+                                    <small class="form-text">Public keys for token validation (industry standard)</small>
+                                </div>
+                            </div>
+                            <div class="form-row">
+                                <div class="form-group">
+                                    <button class="btn btn-sm btn-warning" onclick="generateRSAKeys()">
+                                        <i class="fas fa-key"></i> Generate New RSA Keys
+                                    </button>
+                                    <small class="form-text" style="display: block; margin-top: 8px; color: #ff6b6b;">
+                                        <i class="fas fa-exclamation-triangle"></i> Warning: This will invalidate all existing tokens
+                                    </small>
+                                </div>
+                            </div>
+
+                            <div class="form-divider"></div>
+
+                            <!-- Logging Configuration -->
+                            <h4 class="form-section-title">
+                                <i class="fas fa-file-alt"></i>
+                                Logging Configuration
+                            </h4>
+                            <div class="form-row">
+                                <div class="form-group">
+                                    <label class="form-label">Log Level</label>
+                                    <select class="form-control" id="logLevel">
+                                        <option value="DEBUG">DEBUG</option>
+                                        <option value="INFO">INFO</option>
+                                        <option value="WARNING">WARNING</option>
+                                        <option value="ERROR">ERROR</option>
+                                    </select>
+                                    <small class="form-text">Application logging level (restart required)</small>
+                                </div>
+                            </div>
+
+                            <div class="form-group">
+                                <button class="btn btn-primary" onclick="saveSystemConfig()">
+                                    <i class="fas fa-save"></i>
+                                    Save System Configuration
+                                </button>
+                                <button class="btn btn-outline" onclick="loadSystemConfig()">
+                                    <i class="fas fa-sync"></i>
+                                    Reload
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Registered Services -->
+                    <div class="test-panel" style="margin-top: 20px;">
+                        <div class="test-panel-header">
+                            <div class="panel-title">
+                                <i class="fas fa-network-wired"></i>
+                                Registered Services
+                            </div>
+                            <button class="btn btn-sm btn-primary" onclick="showAddServiceModal()">
+                                <i class="fas fa-plus"></i> Register Service
+                            </button>
+                        </div>
+                        <div class="test-panel-body">
+                            <div class="alert alert-info" style="margin-bottom: 20px;">
+                                <i class="fas fa-info-circle"></i>
+                                <strong>Service Registration</strong>
+                                <p>Register external services to use this gateway's authentication and authorization system. Services fetch public keys from JWKS endpoint for token validation.</p>
+                            </div>
+                            <div id="registeredServicesContainer">
+                                <div class="loading">Loading registered services...</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Health Monitoring Configuration -->
+                    <div class="test-panel" style="margin-top: 20px;">
+                        <div class="test-panel-header">
+                            <div class="panel-title">
+                                <i class="fas fa-heartbeat"></i>
+                                Health Monitoring Configuration
+                            </div>
+                            <div id="healthConfigStatus" class="test-status pending">Not Loaded</div>
+                        </div>
+                        <div class="test-panel-body">
+                            <div class="form-row">
+                                <div class="form-group">
+                                    <label class="form-label">
+                                        <input type="checkbox" id="healthEnabled" onchange="updateHealthConfigStatus()">
+                                        Enable Health Monitoring
+                                    </label>
+                                    <small class="form-text">Automatically check server health periodically</small>
+                                </div>
+                            </div>
+                            <div class="form-row">
+                                <div class="form-group">
+                                    <label class="form-label">Check Interval (seconds)</label>
+                                    <input type="number" class="form-control" id="healthCheckInterval" min="10" value="60">
+                                    <small class="form-text">How often to check server health</small>
+                                </div>
+                                <div class="form-group">
+                                    <label class="form-label">Stale Timeout (seconds)</label>
+                                    <input type="number" class="form-control" id="healthStaleTimeout" min="60" value="300">
+                                    <small class="form-text">Consider connection stale after this time</small>
+                                </div>
+                            </div>
+                            <div class="form-row">
+                                <div class="form-group">
+                                    <label class="form-label">Max Retry Attempts</label>
+                                    <input type="number" class="form-control" id="healthMaxRetry" min="1" max="10" value="3">
+                                    <small class="form-text">Maximum retry attempts for failed connections</small>
+                                </div>
+                                <div class="form-group">
+                                    <label class="form-label">Retry Delay (seconds)</label>
+                                    <input type="number" class="form-control" id="healthRetryDelay" min="1" value="5">
+                                    <small class="form-text">Delay between retry attempts</small>
+                                </div>
+                            </div>
+                            <div class="form-group">
+                                <button class="btn btn-primary" onclick="saveHealthConfig()">
+                                    <i class="fas fa-save"></i>
+                                    Save Health Configuration
+                                </button>
+                                <button class="btn btn-outline" onclick="loadHealthConfig()">
+                                    <i class="fas fa-sync"></i>
+                                    Reload
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Origin Configuration -->
+                    <div class="test-panel">
+                        <div class="test-panel-header">
+                            <div class="panel-title">
+                                <i class="fas fa-globe"></i>
+                                Origin Configuration
+                            </div>
+                            <div id="originConfigStatus" class="test-status pending">Not Loaded</div>
+                        </div>
+                        <div class="test-panel-body">
+                            <div class="form-group">
+                                <label class="form-label">Allowed Origins</label>
+                                <small class="form-text">List of allowed hostnames for CORS. Add origins without protocol (e.g., example.com)</small>
+                                <div id="allowedOriginsList" class="tags-container"></div>
+                                <div class="input-group" style="margin-top: 12px;">
+                                    <input type="text" class="form-control" id="newOrigin" placeholder="example.com or localhost">
+                                    <button class="btn btn-sm btn-primary" onclick="addOrigin()">
+                                        <i class="fas fa-plus"></i>
+                                        Add Origin
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Server Health Status -->
+                    <div class="test-panel">
+                        <div class="test-panel-header">
+                            <div class="panel-title">
+                                <i class="fas fa-heartbeat"></i>
+                                Server Health Status
+                            </div>
+                            <button class="btn btn-sm btn-outline" onclick="loadServerHealth()">
+                                <i class="fas fa-sync"></i>
+                                Refresh
+                            </button>
+                        </div>
+                        <div class="test-panel-body">
+                            <div id="serverHealthList"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Add Server Modal -->
+    <div id="addServerModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <div class="modal-title">Add New MCP Server</div>
+                <button class="modal-close" onclick="closeAddServerModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label class="form-label">Server URL</label>
+                    <input type="text" class="form-control" id="modalServerUrl" placeholder="http://localhost:8001">
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Description</label>
+                    <textarea class="form-control" id="modalServerDescription" rows="2" placeholder="Brief description..."></textarea>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-outline" onclick="closeAddServerModal()">Cancel</button>
+                <button class="btn btn-primary" onclick="addServer()">Add Server</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Server Details Modal -->
+    <div id="serverDetailsModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <div class="modal-title">Server Details</div>
+                <button class="modal-close" onclick="hideModal('serverDetailsModal')">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div id="serverDetailsContent"></div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-outline" onclick="hideModal('serverDetailsModal')">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Tool Details Modal -->
+    <div id="toolDetailsModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <div class="modal-title">Tool Details</div>
+                <button class="modal-close" onclick="hideModal('toolDetailsModal')">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div id="toolDetailsContent"></div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-outline" onclick="hideModal('toolDetailsModal')">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Add OAuth Provider Modal -->
+    <div id="addOAuthProviderModal" class="modal">
+        <div class="modal-content modal-large">
+            <div class="modal-header">
+                <div class="modal-title">
+                    <i class="fas fa-shield-alt"></i>
+                    Add OAuth 2.1 Provider
+                </div>
+                <button class="modal-close" onclick="closeOAuthModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <form id="oauthProviderForm">
+                    <!-- Provider Template Selection -->
+                    <div class="form-group">
+                        <label class="form-label">
+                            <i class="fas fa-list"></i>
+                            Select Provider Template
+                        </label>
+                        <select class="form-control" id="providerTemplate" onchange="loadProviderTemplate()">
+                            <option value="">Custom Provider</option>
+                            <option value="google">Google OAuth</option>
+                            <option value="microsoft">Microsoft OAuth</option>
+                            <option value="github">GitHub OAuth</option>
+                        </select>
+                        <small class="form-text">Choose a template or configure a custom provider</small>
+                    </div>
+
+                    <div class="form-divider"></div>
+
+                    <!-- Basic Configuration -->
+                    <h4 class="form-section-title">
+                        <i class="fas fa-cog"></i>
+                        Basic Configuration
+                    </h4>
+
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label class="form-label">Provider ID *</label>
+                            <input type="text" class="form-control" id="providerId" placeholder="google" required>
+                            <small class="form-text">Unique identifier (lowercase, no spaces)</small>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Provider Name *</label>
+                            <input type="text" class="form-control" id="providerName" placeholder="Google" required>
+                            <small class="form-text">Display name for the provider</small>
+                        </div>
+                    </div>
+
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label class="form-label">Client ID *</label>
+                            <input type="text" class="form-control" id="clientId" placeholder="Your OAuth Client ID" required>
+                            <small class="form-text">OAuth client ID from provider</small>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Client Secret *</label>
+                            <input type="password" class="form-control" id="clientSecret" placeholder="Your OAuth Client Secret" required>
+                            <small class="form-text">OAuth client secret (will be encrypted)</small>
+                        </div>
+                    </div>
+
+                    <div class="form-divider"></div>
+
+                    <!-- OAuth Endpoints -->
+                    <h4 class="form-section-title">
+                        <i class="fas fa-link"></i>
+                        OAuth Endpoints
+                    </h4>
+
+                    <div class="form-group">
+                        <label class="form-label">Authorization URL *</label>
+                        <input type="url" class="form-control" id="authorizeUrl" placeholder="https://..." required>
+                        <small class="form-text">OAuth authorization endpoint</small>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label">Token URL *</label>
+                        <input type="url" class="form-control" id="tokenUrl" placeholder="https://..." required>
+                        <small class="form-text">OAuth token exchange endpoint</small>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label">User Info URL *</label>
+                        <input type="url" class="form-control" id="userinfoUrl" placeholder="https://..." required>
+                        <small class="form-text">User information endpoint</small>
+                    </div>
+
+                    <div class="form-divider"></div>
+
+                    <!-- Scopes -->
+                    <h4 class="form-section-title">
+                        <i class="fas fa-key"></i>
+                        OAuth Scopes
+                    </h4>
+
+                    <div class="form-group">
+                        <label class="form-label">Scopes</label>
+                        <div id="scopesContainer" class="tags-container">
+                            <span class="tag">openid <button onclick="removeScope('openid')">×</button></span>
+                            <span class="tag">email <button onclick="removeScope('email')">×</button></span>
+                            <span class="tag">profile <button onclick="removeScope('profile')">×</button></span>
+                        </div>
+                        <div class="input-group" style="margin-top: 10px;">
+                            <input type="text" class="form-control" id="newScope" placeholder="Add scope (e.g., openid)">
+                            <button type="button" class="btn btn-sm btn-outline" onclick="addScope()">
+                                <i class="fas fa-plus"></i> Add
+                            </button>
+                        </div>
+                        <small class="form-text">OAuth scopes to request from provider</small>
+                    </div>
+
+                    <div class="form-divider"></div>
+
+                    <!-- Advanced Options -->
+                    <details class="form-details">
+                        <summary class="form-summary">
+                            <i class="fas fa-cog"></i>
+                            Advanced Options
+                        </summary>
+                        <div class="form-group" style="margin-top: 15px;">
+                            <label class="form-label">
+                                <input type="checkbox" id="providerEnabled" checked>
+                                Enable this provider
+                            </label>
+                            <small class="form-text">Users can sign in with this provider when enabled</small>
+                        </div>
+                    </details>
+
+                    <!-- Help Text -->
+                    <div class="alert alert-info" style="margin-top: 20px;">
+                        <i class="fas fa-info-circle"></i>
+                        <strong>Setup Guide:</strong>
+                        <ul style="margin: 10px 0 0 20px;">
+                            <li>Create OAuth credentials at your provider's developer console</li>
+                            <li>Add redirect URI: <code>http://localhost:8021/auth/callback</code></li>
+                            <li>For production, update redirect URI to your domain</li>
+                            <li>Client secrets are encrypted before storage</li>
+                        </ul>
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-outline" onclick="closeOAuthModal()">Cancel</button>
+                <button class="btn btn-primary" onclick="saveOAuthProvider()">
+                    <i class="fas fa-save"></i> Save Provider
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Edit OAuth Provider Modal -->
+    <div id="editOAuthProviderModal" class="modal">
+        <div class="modal-content modal-large">
+            <div class="modal-header">
+                <div class="modal-title">
+                    <i class="fas fa-edit"></i>
+                    Edit OAuth Provider
+                </div>
+                <button class="modal-close" onclick="closeModal('editOAuthProviderModal')">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div id="editProviderContent"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- OAuth Provider Setup Guide Modal -->
+    <div id="oauthSetupGuideModal" class="modal">
+        <div class="modal-content modal-large">
+            <div class="modal-header">
+                <div class="modal-title">
+                    <i class="fas fa-book"></i>
+                    OAuth Provider Setup Guide
+                </div>
+                <button class="modal-close" onclick="closeModal('oauthSetupGuideModal')">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="setup-guide">
+                    <div class="provider-guide">
+                        <h3><i class="fab fa-google"></i> Google OAuth Setup</h3>
+                        <ol>
+                            <li>Go to <a href="https://console.cloud.google.com/" target="_blank">Google Cloud Console</a></li>
+                            <li>Create a new project or select existing</li>
+                            <li>Navigate to "APIs & Services" → "Credentials"</li>
+                            <li>Click "Create Credentials" → "OAuth 2.0 Client ID"</li>
+                            <li>Application type: <strong>Web application</strong></li>
+                            <li>Add Authorized redirect URI: <code>http://localhost:8021/auth/callback</code></li>
+                            <li>Click "Create" and copy Client ID and Client Secret</li>
+                        </ol>
+                    </div>
+
+                    <div class="provider-guide">
+                        <h3><i class="fab fa-microsoft"></i> Microsoft OAuth Setup</h3>
+                        <ol>
+                            <li>Go to <a href="https://portal.azure.com/" target="_blank">Azure Portal</a></li>
+                            <li>Navigate to "Azure Active Directory" → "App registrations"</li>
+                            <li>Click "New registration"</li>
+                            <li>Enter name and select account types</li>
+                            <li>Add Redirect URI (Web): <code>http://localhost:8021/auth/callback</code></li>
+                            <li>After creation, go to "Certificates & secrets"</li>
+                            <li>Create a new client secret</li>
+                            <li>Copy Application (client) ID and Client Secret</li>
+                        </ol>
+                    </div>
+
+                    <div class="provider-guide">
+                        <h3><i class="fab fa-github"></i> GitHub OAuth Setup</h3>
+                        <ol>
+                            <li>Go to GitHub Settings → <a href="https://github.com/settings/developers" target="_blank">Developer settings</a></li>
+                            <li>Click "OAuth Apps" → "New OAuth App"</li>
+                            <li>Enter application details</li>
+                            <li>Authorization callback URL: <code>http://localhost:8021/auth/callback</code></li>
+                            <li>Click "Register application"</li>
+                            <li>Copy Client ID</li>
+                            <li>Generate a new client secret and copy it</li>
+                        </ol>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-primary" onclick="closeModal('oauthSetupGuideModal')">Got it!</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Create Role Modal -->
+    <div id="createRoleModal" class="modal">
+        <div class="modal-content modal-large">
+            <div class="modal-header">
+                <div class="modal-title">
+                    <i class="fas fa-user-shield"></i>
+                    Create New Role
+                </div>
+                <button class="modal-close" onclick="closeModal('createRoleModal')">&times;</button>
+            </div>
+            <div class="modal-body">
+                <form id="createRoleForm">
+                    <div class="form-group">
+                        <label class="form-label">Role Name *</label>
+                        <input type="text" class="form-control" id="roleName" placeholder="e.g., Developer" required>
+                        <small class="form-text">Unique role identifier</small>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label">Description</label>
+                        <textarea class="form-control" id="roleDescription" rows="2" placeholder="Brief description of this role..."></textarea>
+                    </div>
+
+                    <div class="form-divider"></div>
+
+                    <h4 class="form-section-title">
+                        <i class="fas fa-key"></i>
+                        Permissions
+                    </h4>
+
+                    <div class="permissions-grid" id="permissionsGrid">
+                        <!-- Permissions will be dynamically loaded -->
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-outline" onclick="closeModal('createRoleModal')">Cancel</button>
+                <button class="btn btn-primary" onclick="saveNewRole()">
+                    <i class="fas fa-save"></i> Create Role
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Edit Role Modal -->
+    <div id="editRoleModal" class="modal">
+        <div class="modal-content modal-large">
+            <div class="modal-header">
+                <div class="modal-title">
+                    <i class="fas fa-edit"></i>
+                    Edit Role
+                </div>
+                <button class="modal-close" onclick="closeModal('editRoleModal')">&times;</button>
+            </div>
+            <div class="modal-body">
+                <input type="hidden" id="editRoleId">
+                <form id="editRoleForm">
+                    <div class="form-group">
+                        <label class="form-label">Role Name *</label>
+                        <input type="text" class="form-control" id="editRoleName" placeholder="e.g., Developer" required>
+                        <small class="form-text">Unique role identifier</small>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label">Description</label>
+                        <textarea class="form-control" id="editRoleDescription" rows="2" placeholder="Brief description of this role..."></textarea>
+                    </div>
+
+                    <div class="form-divider"></div>
+
+                    <h4 class="form-section-title">
+                        <i class="fas fa-key"></i>
+                        Permissions
+                    </h4>
+
+                    <div class="permissions-grid" id="editPermissionsGrid">
+                        <!-- Permissions will be dynamically loaded -->
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-outline" onclick="closeModal('editRoleModal')">Cancel</button>
+                <button class="btn btn-primary" onclick="updateRole()">
+                    <i class="fas fa-save"></i> Update Role
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- View Role Modal -->
+    <div id="viewRoleModal" class="modal">
+        <div class="modal-content modal-large">
+            <div class="modal-header">
+                <div class="modal-title">
+                    <i class="fas fa-eye"></i>
+                    Role Details
+                </div>
+                <button class="modal-close" onclick="closeModal('viewRoleModal')">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div id="viewRoleContent">
+                    <!-- Role details will be loaded here -->
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-outline" onclick="closeModal('viewRoleModal')">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Add User Modal -->
+    <div id="addUserModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <div class="modal-title">
+                    <i class="fas fa-user-plus"></i>
+                    Add User Manually
+                </div>
+                <button class="modal-close" onclick="closeModal('addUserModal')">&times;</button>
+            </div>
+            <div class="modal-body">
+                <form id="addUserForm">
+                    <div class="form-group">
+                        <label class="form-label">Email *</label>
+                        <input type="email" class="form-control" id="userEmail" placeholder="user@example.com" required>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label">Name *</label>
+                        <input type="text" class="form-control" id="userName" placeholder="John Doe" required>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label">Provider</label>
+                        <select class="form-control" id="userProvider" onchange="togglePasswordField()">
+                            <option value="manual">Manual (Local)</option>
+                            <option value="google">Google</option>
+                            <option value="microsoft">Microsoft</option>
+                            <option value="github">GitHub</option>
+                            <option value="ad">Active Directory</option>
+                        </select>
+                        <small class="form-text">Select authentication provider for this user</small>
+                    </div>
+
+                    <div class="form-group" id="userPasswordGroup">
+                        <label class="form-label">Password *</label>
+                        <input type="password" class="form-control" id="userPassword" placeholder="Enter password" minlength="8">
+                        <small class="form-text">Required for Manual (Local) authentication</small>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label">Assign Roles</label>
+                        <div id="userRolesSelect" class="checkbox-group">
+                            <!-- Roles will be dynamically loaded -->
+                        </div>
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-outline" onclick="closeModal('addUserModal')">Cancel</button>
+                <button class="btn btn-primary" onclick="saveNewUser()">
+                    <i class="fas fa-save"></i> Add User
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Active Directory Sync Modal -->
+    <div id="adSyncModal" class="modal">
+        <div class="modal-content modal-large">
+            <div class="modal-header">
+                <div class="modal-title">
+                    <i class="fas fa-user-plus"></i>
+                    Add Users from Active Directory
+                </div>
+                <button class="modal-close" onclick="closeModal('adSyncModal')">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="alert alert-info">
+                    <i class="fas fa-info-circle"></i>
+                    <strong>Search and Add AD Users</strong>
+                    <p>Search for users in Active Directory and add them to the system with the "Standard User" role.</p>
+                </div>
+
+                <form id="adSyncForm">
+                    <h4 class="form-section-title">
+                        <i class="fas fa-search"></i>
+                        Search Users
+                    </h4>
+
+                    <div class="form-group">
+                        <label class="form-label">User Search Filter</label>
+                        <input type="text" class="form-control" id="adUserFilter" value="(objectClass=user)" placeholder="(objectClass=user)">
+                        <small class="form-text">Search for specific users: (&(objectClass=user)(cn=John*)) or all users: (objectClass=user)</small>
+                    </div>
+
+                    <div class="form-group">
+                        <button type="button" class="btn btn-primary" onclick="queryADUsers()">
+                            <i class="fas fa-search"></i> Search Users
+                        </button>
+                    </div>
+
+                    <div id="adUsersResult" style="margin-top: 20px;"></div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-outline" onclick="closeModal('adSyncModal')">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Group to Role Mapping Modal -->
+    <div id="groupMappingModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <div class="modal-title">
+                    <i class="fas fa-link"></i>
+                    Map AD Group to Role
+                </div>
+                <button class="modal-close" onclick="closeModal('groupMappingModal')">&times;</button>
+            </div>
+            <div class="modal-body">
+                <form id="groupMappingForm">
+                    <div class="form-group">
+                        <label class="form-label">AD Group</label>
+                        <input type="text" class="form-control" id="mappingGroupDN" readonly>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label">Assign to Role *</label>
+                        <select class="form-control" id="mappingRoleId" required>
+                            <option value="">Select a role...</option>
+                            <!-- Roles will be dynamically loaded -->
+                        </select>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label">
+                            <input type="checkbox" id="mappingAutoSync" checked>
+                            Auto-sync group members
+                        </label>
+                        <small class="form-text">Automatically sync users when they log in</small>
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-outline" onclick="closeModal('groupMappingModal')">Cancel</button>
+                <button class="btn btn-primary" onclick="saveGroupMapping()">
+                    <i class="fas fa-save"></i> Save Mapping
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Login Modal -->
+    <div id="loginModal" class="modal" style="display: none;">
+        <div class="modal-content">
+            <div class="modal-header">
+                <div class="modal-title">
+                    <i class="fas fa-sign-in-alt"></i>
+                    Sign In to MCP Portal
+                </div>
+            </div>
+            <div class="modal-body">
+                <!-- Local Authentication -->
+                <div class="auth-section">
+                    <h4 class="auth-section-title">
+                        <i class="fas fa-user-lock"></i>
+                        Local Authentication
+                    </h4>
+                    <form id="localLoginForm" onsubmit="return handleLocalLogin(event);">
+                        <div class="form-group">
+                            <label class="form-label">Email / Username</label>
+                            <input type="text" class="form-control" id="localEmail" placeholder="admin" required>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Password</label>
+                            <input type="password" class="form-control" id="localPassword" placeholder="Enter password" required>
+                        </div>
+                        <div id="localLoginError" class="alert alert-danger" style="display: none;"></div>
+                        <button type="submit" class="btn btn-primary btn-block">
+                            <i class="fas fa-sign-in-alt"></i>
+                            Sign In
+                        </button>
+                    </form>
+                </div>
+
+                <!-- Divider -->
+                <div class="auth-divider">
+                    <span>OR</span>
+                </div>
+
+                <!-- OAuth Providers -->
+                <div class="auth-section">
+                    <h4 class="auth-section-title">
+                        <i class="fas fa-shield-alt"></i>
+                        Sign in with OAuth
+                    </h4>
+                    <div id="oauthProviderButtons" class="oauth-providers-list">
+                        <p class="text-muted" id="noOAuthProvidersMessage">
+                            <i class="fas fa-info-circle"></i>
+                            No OAuth providers configured yet.
+                        </p>
+                    </div>
+                </div>
+
+                <!-- Default Credentials Help -->
+                <div class="alert alert-info" style="margin-top: 20px;">
+                    <i class="fas fa-info-circle"></i>
+                    <strong>First Time Setup:</strong>
+                    <p style="margin: 10px 0 0 0;">Default credentials are <strong>admin</strong> / <strong>admin</strong></p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- User Profile Dropdown (Hidden until logged in) -->
+    <div id="userProfileDropdown" style="display: none; position: fixed; top: 60px; right: 20px; background: var(--primary-bg); border: 1px solid var(--border-color); border-radius: 0.5rem; box-shadow: var(--shadow-lg); padding: 1rem; min-width: 250px; z-index: 1001;">
+        <div style="display: flex; align-items: center; margin-bottom: 1rem; padding-bottom: 1rem; border-bottom: 1px solid var(--border-color);">
+            <div style="width: 40px; height: 40px; border-radius: 50%; background: var(--accent-primary); display: flex; align-items: center; justify-content: center; color: white; font-weight: 600; margin-right: 12px; font-size: 0.875rem;">
+                <span id="userInitials"></span>
+            </div>
+            <div style="flex: 1;">
+                <div id="userDisplayName" style="font-weight: 600; color: var(--text-primary); font-size: 0.9375rem;"></div>
+                <div id="userDisplayEmail" style="font-size: 0.8125rem; color: var(--text-secondary);"></div>
+            </div>
+        </div>
+        <div id="userRolesList" style="margin-bottom: 1rem; padding-bottom: 1rem; border-bottom: 1px solid var(--border-color);"></div>
+        <button class="btn btn-outline btn-sm btn-block" onclick="changePassword()" style="margin-bottom: 0.5rem;">
+            <i class="fas fa-key"></i> Change Password
+        </button>
+        <button class="btn btn-primary btn-sm btn-block" onclick="showJWTTokenModal()" style="margin-bottom: 0.5rem;">
+            <i class="fas fa-code"></i> Get JWT Token
+        </button>
+        <button class="btn btn-danger btn-sm btn-block" onclick="handleLogout()">
+            <i class="fas fa-sign-out-alt"></i> Logout
+        </button>
+    </div>
+
+    <!-- Add Service Modal -->
+    <div id="addServiceModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <div class="modal-title">
+                    <i class="fas fa-plus"></i>
+                    Register New Service
+                </div>
+                <button class="modal-close" onclick="closeModal('addServiceModal')">&times;</button>
+            </div>
+            <div class="modal-body">
+                <form id="addServiceForm">
+                    <div class="form-group">
+                        <label class="form-label">Service ID *</label>
+                        <input type="text" class="form-control" id="serviceId" placeholder="agentic_search" required>
+                        <small class="form-text">Unique identifier (lowercase, no spaces)</small>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Service Name *</label>
+                        <input type="text" class="form-control" id="serviceName" placeholder="Agentic Search" required>
+                        <small class="form-text">Human-readable service name</small>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Service URL *</label>
+                        <input type="url" class="form-control" id="serviceUrl" placeholder="http://localhost:8023" required>
+                        <small class="form-text">Base URL where the service is running</small>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Description</label>
+                        <textarea class="form-control" id="serviceDescription" rows="2" placeholder="Brief description..."></textarea>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">
+                            <input type="checkbox" id="serviceEnabled" checked>
+                            Enable this service
+                        </label>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">
+                            <input type="checkbox" id="serviceRequiresAuth" checked>
+                            Requires authentication
+                        </label>
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-outline" onclick="closeModal('addServiceModal')">Cancel</button>
+                <button class="btn btn-primary" onclick="saveNewService()">
+                    <i class="fas fa-save"></i> Register Service
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Change Password Modal -->
+    <div id="changePasswordModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <div class="modal-title">
+                    <i class="fas fa-key"></i>
+                    Change Password
+                </div>
+                <button class="modal-close" onclick="closeModal('changePasswordModal')">&times;</button>
+            </div>
+            <div class="modal-body">
+                <form id="changePasswordForm" onsubmit="return submitPasswordChange(event);">
+                    <div class="form-group">
+                        <label class="form-label">New Password *</label>
+                        <input type="password" class="form-control" id="newPassword" placeholder="Enter new password" required minlength="8">
+                        <small class="form-text">Minimum 8 characters</small>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Confirm Password *</label>
+                        <input type="password" class="form-control" id="confirmPassword" placeholder="Confirm new password" required>
+                    </div>
+                    <div id="passwordChangeError" class="alert alert-danger" style="display: none;"></div>
+                    <div id="passwordChangeSuccess" class="alert alert-success" style="display: none;"></div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-outline" onclick="closeModal('changePasswordModal')">Cancel</button>
+                <button class="btn btn-primary" onclick="submitPasswordChange(event)">
+                    <i class="fas fa-save"></i> Update Password
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- JWT Token Modal -->
+    <div id="jwtTokenModal" class="modal">
+        <div class="modal-content modal-large">
+            <div class="modal-header">
+                <div class="modal-title">
+                    <i class="fas fa-code"></i>
+                    Your JWT Token
+                </div>
+                <button class="modal-close" onclick="closeModal('jwtTokenModal')">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="alert alert-info">
+                    <i class="fas fa-info-circle"></i>
+                    <strong>JWT Token for API Access & Claude Desktop</strong>
+                    <p>Use this token to authenticate API requests or configure Claude Desktop to access the gateway.</p>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label">JWT Access Token</label>
+                    <div style="position: relative;">
+                        <textarea
+                            id="jwtTokenValue"
+                            class="form-control"
+                            rows="6"
+                            readonly
+                            style="font-family: monospace; font-size: 0.875rem; background-color: #f8f9fa; resize: none;"
+                        ></textarea>
+                        <button
+                            class="btn btn-sm btn-outline"
+                            onclick="copyJWTToken()"
+                            style="position: absolute; top: 8px; right: 8px;"
+                            id="copyTokenBtn"
+                        >
+                            <i class="fas fa-copy"></i> Copy
+                        </button>
+                    </div>
+                    <small class="form-text">Click the copy button to copy the token to your clipboard</small>
+                </div>
+
+                <div class="form-divider"></div>
+
+                <h4 class="form-section-title">
+                    <i class="fas fa-desktop"></i>
+                    Claude Desktop Configuration
+                </h4>
+
+                <div class="alert alert-success" style="margin-bottom: 15px;">
+                    <i class="fas fa-check-circle"></i>
+                    <strong>Quick Setup for Claude Desktop</strong>
+                    <p>Copy the configuration below and paste it into your Claude Desktop config file.</p>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label">Configuration File Location</label>
+                    <code id="claudeConfigPath" style="display: block; padding: 8px; background-color: #f8f9fa; border-radius: 4px; margin-bottom: 10px;">
+                        ~/Library/Application Support/Claude/claude_desktop_config.json
+                    </code>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label">Claude Desktop Config (JSON)</label>
+                    <div style="position: relative;">
+                        <textarea
+                            id="claudeConfigValue"
+                            class="form-control"
+                            rows="8"
+                            readonly
+                            style="font-family: monospace; font-size: 0.875rem; background-color: #f8f9fa; resize: none;"
+                        ></textarea>
+                        <button
+                            class="btn btn-sm btn-outline"
+                            onclick="copyClaudeConfig()"
+                            style="position: absolute; top: 8px; right: 8px;"
+                            id="copyConfigBtn"
+                        >
+                            <i class="fas fa-copy"></i> Copy
+                        </button>
+                    </div>
+                    <small class="form-text">This configuration connects Claude Desktop to the gateway with your token</small>
+                </div>
+
+                <div class="alert alert-warning" style="margin-top: 15px;">
+                    <i class="fas fa-exclamation-triangle"></i>
+                    <strong>Security Note:</strong>
+                    <p style="margin: 5px 0 0 0;">Keep your JWT token secure. It provides full access to your account. Don't share it publicly.</p>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-primary" onclick="closeModal('jwtTokenModal')">
+                    <i class="fas fa-check"></i> Done
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Tool Role Assignment Modal -->
+    <div id="toolRoleAssignmentModal" class="modal">
+        <div class="modal-content modal-large">
+            <div class="modal-header">
+                <div class="modal-title">
+                    <i class="fas fa-user-shield"></i>
+                    Assign Access Roles
+                </div>
+                <button class="modal-close" onclick="closeToolRoleModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="tool-role-modal-info">
+                    <div class="form-group">
+                        <label class="form-label">Tool Name</label>
+                        <input type="text" class="form-control" id="modalToolName" readonly>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Server</label>
+                        <input type="text" class="form-control" id="modalToolServer" readonly>
+                    </div>
+                </div>
+
+                <div class="form-divider"></div>
+
+                <h4 class="form-section-title">
+                    <i class="fas fa-key"></i>
+                    Select Roles
+                </h4>
+
+                <div class="tool-role-modal-roles" id="toolRoleModalRolesList">
+                    <!-- Roles will be dynamically loaded here -->
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-outline" onclick="closeToolRoleModal()">Cancel</button>
+                <button class="btn btn-primary" onclick="saveToolRolesFromModal()">
+                    <i class="fas fa-save"></i> Save Roles
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script src="static/js/mcp-portal.js?v=9"></script>
+    <script src="static/js/admin-security.js?v=9"></script>
+    <script src="static/js/admin-ad-fetched.js?v=9"></script>
+    <script src="static/js/auth.js?v=9"></script>
+    <script src="static/js/system-config.js?v=1"></script>
+</body>
+</html>

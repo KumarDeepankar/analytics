@@ -1,0 +1,10 @@
+fastapi
+uvicorn
+aiohttp
+aiofiles
+python-jose[cryptography]
+cryptography
+pydantic
+python-multipart
+ldap3
+python-dotenv

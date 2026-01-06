@@ -49,9 +49,12 @@ class ServerHealthStatus:
         self.last_check = datetime.now()
         self.consecutive_failures += 1
         self.last_error = error
+        # RCA DEBUG: Always print failure reason
+        print(f"[RCA_MARK_FAILURE] server={self.server_url}, error='{error}', failures={self.consecutive_failures}, is_healthy={self.is_healthy}")
         # Mark unhealthy after 3 consecutive failures
         if self.consecutive_failures >= 3:
             self.is_healthy = False
+            print(f"[RCA_UNHEALTHY] server={self.server_url} marked UNHEALTHY after {self.consecutive_failures} failures, last_error='{error}'")
 
     def is_stale(self, timeout_seconds: int) -> bool:
         """Check if connection is stale"""
@@ -750,6 +753,7 @@ class DiscoveryService:
 
         # Skip servers that are marked unhealthy (3+ consecutive failures)
         if not health.is_healthy:
+            print(f"[RCA_SKIP_UNHEALTHY] server={server_url}, failures={health.consecutive_failures}, last_error='{health.last_error}'")
             logger.debug(f"Skipping unhealthy server {server_url} (failures: {health.consecutive_failures})")
             return True
 
@@ -758,6 +762,7 @@ class DiscoveryService:
         if health.last_check and health.consecutive_failures > 0:
             time_since_check = (datetime.now() - health.last_check).total_seconds()
             if time_since_check < 30:
+                print(f"[RCA_SKIP_RECENT_FAIL] server={server_url}, failures={health.consecutive_failures}, seconds_ago={time_since_check:.1f}, last_error='{health.last_error}'")
                 logger.debug(f"Skipping recently failed server {server_url} (will retry after 30s)")
                 return True
 

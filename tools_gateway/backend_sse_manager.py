@@ -205,6 +205,7 @@ class BackendSSEClient:
 
             # Log state change
             if was_connected:
+                print(f"[RCA_SSE_DISCONNECT] server_id={self.server_id}, reason={disconnect_reason}, was_connected={was_connected}, initialized={self.initialized}")
                 logger.warning(f"[SSE_STATE] Connection state changed: connected=True -> connected=False for '{self.server_id}', reason: {disconnect_reason}")
 
             # Check if we should attempt reconnection
@@ -261,15 +262,18 @@ class BackendSSEClient:
 
             # Check for response messages (with request ID)
             request_id = data.get('id')
+            response_size = len(json.dumps(data)) if data else 0
             logger.debug(f"[{self.server_id}] Checking response ID: {request_id}, pending futures: {list(self.response_futures.keys())}")
             if request_id and request_id in self.response_futures:
                 future = self.response_futures.pop(request_id)
                 if not future.done():
+                    print(f"[RCA_RESPONSE_RECEIVED] server_id={self.server_id}, request_id={request_id}, response_size={response_size} bytes, pending_futures={len(self.response_futures)}")
                     logger.info(f"[{self.server_id}] Setting future result for request ID: {request_id}")
                     future.set_result(data)
                 else:
                     logger.warning(f"[{self.server_id}] Future already done for request ID: {request_id}")
             elif request_id:
+                print(f"[RCA_UNKNOWN_REQUEST_ID] server_id={self.server_id}, request_id={request_id}, response_size={response_size} bytes, pending_futures={list(self.response_futures.keys())}")
                 logger.warning(f"[{self.server_id}] Received response for unknown request ID: {request_id}")
 
     async def send_notification(self, message: Dict[str, Any]) -> None:
@@ -307,6 +311,7 @@ class BackendSSEClient:
         # Create future for response
         future = asyncio.Future()
         self.response_futures[request_id] = future
+        print(f"[RCA_SEND_MESSAGE] server_id={self.server_id}, request_id={request_id}, method={message.get('method', 'unknown')}, pending_futures={len(self.response_futures)}")
         logger.info(f"[{self.server_id}] Sending message (ID: {request_id}): {message.get('method', 'unknown method')}")
 
         try:
@@ -325,9 +330,11 @@ class BackendSSEClient:
             return result
 
         except asyncio.TimeoutError:
+            print(f"[RCA_TIMEOUT] server_id={self.server_id}, request_id={request_id}, timeout={timeout}s, connected={self.connected}, initialized={self.initialized}")
             self.response_futures.pop(request_id, None)
             raise Exception(f"Timeout waiting for response from {self.server_id}")
         except Exception as e:
+            print(f"[RCA_SEND_ERROR] server_id={self.server_id}, request_id={request_id}, error={type(e).__name__}: {e}")
             self.response_futures.pop(request_id, None)
             raise
 
@@ -404,12 +411,18 @@ class BackendSSEManager:
     def is_connected(self, server_id: str) -> bool:
         """Check if connected to a backend server (SSE connection established)"""
         client = self.clients.get(server_id)
-        return client is not None and client.connected
+        result = client is not None and client.connected
+        if not result:
+            print(f"[RCA_IS_CONNECTED] server_id={server_id}, client_exists={client is not None}, connected={client.connected if client else 'N/A'} -> result={result}")
+        return result
 
     def is_initialized(self, server_id: str) -> bool:
         """Check if server is connected AND properly initialized with MCP protocol"""
         client = self.clients.get(server_id)
-        return client is not None and client.connected and client.initialized
+        result = client is not None and client.connected and client.initialized
+        if not result:
+            print(f"[RCA_IS_INITIALIZED] server_id={server_id}, client_exists={client is not None}, connected={client.connected if client else 'N/A'}, initialized={client.initialized if client else 'N/A'} -> result={result}")
+        return result
 
     async def close_all(self):
         """Close all backend connections"""

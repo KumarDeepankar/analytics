@@ -238,12 +238,27 @@ class BackendSSEClient:
         if not self.connected or not self.messages_url:
             raise Exception(f"Backend SSE client not connected: {self.server_id}")
 
+        method = message.get('method', '')
+
+        # Only discovery (tools/list) waits for pending requests to clear
+        # Agent requests (tools/call) proceed immediately for concurrency
+        if method == 'tools/list' and len(self.response_futures) > 0:
+            max_wait = 90  # wait up to 90s for pending requests
+            wait_interval = 2.0
+            waited = 0
+            while len(self.response_futures) > 0 and waited < max_wait:
+                print(f"[RCA_DISCOVERY_WAIT] server_id={self.server_id}, pending={len(self.response_futures)}, waited={waited}s/{max_wait}s")
+                await asyncio.sleep(wait_interval)
+                waited += wait_interval
+            if len(self.response_futures) == 0:
+                print(f"[RCA_DISCOVERY_READY] server_id={self.server_id}, pending cleared after {waited}s")
+
         request_id = message.get('id', str(uuid.uuid4()))
         message['id'] = request_id
 
         future = asyncio.Future()
         self.response_futures[request_id] = future
-        print(f"[RCA_SEND] server_id={self.server_id}, request_id={request_id}, method={message.get('method', 'unknown')}, pending={len(self.response_futures)}")
+        print(f"[RCA_SEND] server_id={self.server_id}, request_id={request_id}, method={method}, pending={len(self.response_futures)}")
 
         try:
             async with self._http_session.post(self.messages_url, json=message) as response:

@@ -36,7 +36,7 @@ logger = logging.getLogger(__name__)
 # ============================================================================
 
 # OpenSearch configuration
-OPENSEARCH_URL = os.getenv("OPENSEARCH_URL", "https://98.93.206.97:9200")
+OPENSEARCH_URL = os.getenv("OPENSEARCH_URL", "http://localhost:9200")
 OPENSEARCH_USERNAME = os.getenv("OPENSEARCH_USERNAME", "admin")
 OPENSEARCH_PASSWORD = os.getenv("OPENSEARCH_PASSWORD", "admin")
 INDEX_NAME = os.getenv("INDEX_NAME", "events_analytics_v4")
@@ -1386,56 +1386,6 @@ async def startup():
     update_tool_description()
 
     logger.info("Server initialized successfully")
-
-
-# ============================================================================
-# TEST TOOL FOR LARGE RESPONSES
-# ============================================================================
-
-@mcp.tool(description="Test tool that generates a large response of specified size in KB. Use for testing SSE connection handling with large payloads.")
-async def generate_large_response(size_kb: int = 100) -> ToolResult:
-    """
-    Generate a test response of approximately the specified size in KB.
-    Useful for testing SSE connection handling with large payloads.
-
-    Args:
-        size_kb: Desired response size in kilobytes (default 100KB, max 10000KB/10MB)
-    """
-    # Limit to 10MB max
-    size_kb = min(size_kb, 10000)
-
-    # Generate dummy data
-    # Each record is roughly 200 bytes
-    records_needed = (size_kb * 1024) // 200
-
-    dummy_records = []
-    for i in range(records_needed):
-        dummy_records.append({
-            "id": f"record_{i:06d}",
-            "title": f"Test Event {i} - This is a sample record for testing large response handling",
-            "description": f"Description for record {i} with some additional text to increase size",
-            "country": ["USA", "India", "Singapore", "Germany", "UK"][i % 5],
-            "year": 2020 + (i % 5),
-            "value": i * 1.5
-        })
-
-    response_data = {
-        "status": "success",
-        "test_type": "large_response",
-        "requested_size_kb": size_kb,
-        "records_generated": len(dummy_records),
-        "data": dummy_records
-    }
-
-    # Calculate actual size
-    import json
-    actual_size = len(json.dumps(response_data))
-    response_data["actual_size_bytes"] = actual_size
-    response_data["actual_size_kb"] = round(actual_size / 1024, 2)
-
-    logger.info(f"Generated large response: {actual_size} bytes ({actual_size/1024:.1f} KB)")
-
-    return ToolResult(content=[], structured_content=response_data)
 
 
 # ============================================================================

@@ -10,7 +10,7 @@ import os
 import json
 
 # Configuration
-OPENSEARCH_URL = os.getenv("OPENSEARCH_URL", "https://98.93.206.97:9200")
+OPENSEARCH_URL = os.getenv("OPENSEARCH_URL", "http://localhost:9200")
 OPENSEARCH_USERNAME = os.getenv("OPENSEARCH_USERNAME", "admin")
 OPENSEARCH_PASSWORD = os.getenv("OPENSEARCH_PASSWORD", "admin")
 INDEX_NAME = os.getenv("INDEX_NAME", "events_analytics_v4")

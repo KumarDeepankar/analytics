@@ -96,7 +96,7 @@ class SearchAgentState(TypedDict):
     # Conversation history for followup queries
     conversation_history: List[ConversationTurn]
     is_followup_query: bool
-    conversation_was_reset: bool  # Flag to notify user when 2-turn limit was reached
+    conversation_was_reset: bool  # Flag to notify user when conversation was reset (unused with sliding window)
 
     # LLM Configuration
     llm_provider: Optional[str]  # "anthropic" or "ollama"

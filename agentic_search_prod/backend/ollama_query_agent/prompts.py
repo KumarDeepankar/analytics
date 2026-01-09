@@ -219,6 +219,7 @@ Sources: {successes} successful, {errors} errors
 - Link sources with icon only: `[↗](url)` - shows ↗, hides URL
 - Keep response natural and conversational
 - If results are limited or filtered, mention that more data may be available
+- **Honor user's format requests**: If user asks for table/list/bullets/summary/detailed format, use that exact format
 {followup_guidelines}
 # STRICT RULES - DO NOT VIOLATE
 

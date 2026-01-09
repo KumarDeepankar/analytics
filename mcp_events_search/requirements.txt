@@ -1,5 +1,0 @@
-fastmcp>=2.0.0
-aiohttp>=3.9.0
-rapidfuzz>=3.0.0
-requests>=2.31.0
-llama-index-core>=0.10.0

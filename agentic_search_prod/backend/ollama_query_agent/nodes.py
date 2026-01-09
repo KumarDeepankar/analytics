@@ -282,13 +282,12 @@ async def parallel_initialization_node(state: SearchAgentState) -> SearchAgentSt
         conversation_history = state.get("conversation_history", [])
         conversation_was_reset = False
 
-        # AUTO-RESET: If we have 1 or more turns, reset for fresh conversation
-        # This allows only 1 follow-up query per conversation cycle
-        # Change >= 1 to >= 2 if you want to allow 2 follow-ups, etc.
-        MAX_FOLLOWUP_TURNS = 4  # Number of follow-up turns allowed
-        if len(conversation_history) > MAX_FOLLOWUP_TURNS:
-            conversation_history = []
-            conversation_was_reset = True
+        # SLIDING WINDOW: Keep only the most recent turns to allow continuous conversation
+        # When history exceeds limit, truncate oldest turns instead of full reset
+        MAX_HISTORY_TURNS = 3  # Keep last N turns in context (adjust based on token limits)
+        if len(conversation_history) > MAX_HISTORY_TURNS:
+            conversation_history = conversation_history[-MAX_HISTORY_TURNS:]
+            # Note: conversation_was_reset stays False since we're preserving context
 
         # Determine if this is a follow-up query
         is_followup = len(conversation_history) > 0 and not conversation_was_reset

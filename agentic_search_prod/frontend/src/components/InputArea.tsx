@@ -39,9 +39,9 @@ export function InputArea() {
   // Count completed assistant messages (conversation turns)
   const completedTurns = state.messages.filter(m => m.type === 'assistant' && !m.isStreaming).length;
 
-  // 4 follow-ups are allowed (MAX_FOLLOWUP_TURNS = 4)
-  const canAskFollowUp = completedTurns >= 1 && completedTurns <= 4;
-  const followUpLimitReached = completedTurns >= 5;
+  // Continuous conversation enabled (backend uses sliding window)
+  const canAskFollowUp = completedTurns >= 1;
+  const followUpLimitReached = false; // No limit - backend handles context truncation
 
   const handleSubmit = () => {
     if (!query.trim() || isSearching) return;
@@ -79,11 +79,9 @@ export function InputArea() {
           onChange={(e) => setQuery(e.target.value)}
           onKeyDown={handleKeyDown}
           placeholder={
-            followUpLimitReached
-              ? "Follow-up limit reached. Start a new conversation."
-              : canAskFollowUp
-                ? "Ask a follow-up question..."
-                : "Ask anything..."
+            canAskFollowUp
+              ? "Ask a follow-up question..."
+              : "Ask anything..."
           }
           disabled={isSearching || followUpLimitReached}
           style={{

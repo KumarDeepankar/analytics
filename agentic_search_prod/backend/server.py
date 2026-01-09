@@ -329,7 +329,7 @@ async def search_interaction_stream(
                                 "is_reset": is_reset,
                                 "is_followup": is_followup,
                                 "turn_count": history_len,
-                                "followup_allowed": history_len < 4  # MAX_FOLLOWUP_TURNS = 4
+                                "followup_allowed": True  # Continuous conversation enabled (sliding window)
                             }
                             yield f"TURN_INFO:{json_lib.dumps(turn_info)}\n"
                             await asyncio.sleep(0.01)

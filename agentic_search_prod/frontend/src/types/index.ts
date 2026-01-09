@@ -103,11 +103,17 @@ export interface StreamChunk {
   timestamp: number;
 }
 
+export interface ConversationTurn {
+  query: string;
+  response: string;
+}
+
 export interface SearchRequest {
   query: string;
   enabled_tools: string[];
   session_id: string;
   is_followup: boolean;
+  conversation_history?: ConversationTurn[];
   theme?: string;
   theme_strategy?: string;
   llm_provider?: string;
@@ -130,4 +136,5 @@ export type ChatAction =
   | { type: 'SET_LLM_MODEL'; payload: string }
   | { type: 'SET_THEME'; payload: Theme }
   | { type: 'SET_USER'; payload: User | null }
-  | { type: 'RESET_CHAT' };
+  | { type: 'RESET_CHAT' }
+  | { type: 'LOAD_CONVERSATION'; payload: { sessionId: string; messages: Message[] } };

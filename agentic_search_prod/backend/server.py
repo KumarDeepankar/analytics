@@ -58,6 +58,7 @@ from auth import (
 )
 from auth_routes import router as auth_router
 from debug_auth import router as debug_auth_router
+from conversation_routes import router as conversation_router
 
 
 # Modern FastAPI lifespan event handler (replaces deprecated on_event)
@@ -103,6 +104,7 @@ app = FastAPI(
 # Include authentication routes
 app.include_router(auth_router)
 app.include_router(debug_auth_router)
+app.include_router(conversation_router)
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 STATIC_DIR = os.path.join(BASE_DIR, "static")
@@ -218,11 +220,17 @@ async def get_available_models(request: Request):
         raise HTTPException(status_code=500, detail=f"Error fetching models: {str(e)}")
 
 
+class ConversationTurn(BaseModel):
+    query: str
+    response: str
+
+
 class SearchRequest(BaseModel):
     query: str
     enabled_tools: Optional[List[str]] = None
     session_id: Optional[str] = None
     is_followup: Optional[bool] = False
+    conversation_history: Optional[List[ConversationTurn]] = None  # Previous Q&A turns from frontend
     theme: Optional[str] = None  # User theme preference: professional, minimal, dark, vibrant, nature
     theme_strategy: Optional[str] = "auto"  # auto, intent, time, keywords, weighted, random
     llm_provider: Optional[str] = None  # LLM provider: "anthropic" or "ollama"
@@ -234,6 +242,7 @@ async def search_interaction_stream(
     query: str,
     enabled_tools: List[str],
     is_followup: bool = False,
+    frontend_conversation_history: Optional[List[Dict[str, str]]] = None,
     theme: Optional[str] = None,
     theme_strategy: str = "auto",
     llm_provider: Optional[str] = None,
@@ -247,15 +256,21 @@ async def search_interaction_stream(
         thread_id = session_id
         config = {"configurable": {"thread_id": thread_id}}
 
-        # Try to retrieve conversation history from checkpointer
+        # Use frontend-provided conversation history if available (for loaded history sessions)
+        # Otherwise, try to retrieve from checkpointer (for active sessions)
         conversation_history = []
-        try:
-            state_snapshot = await search_compiled_agent.aget_state(config)
-            if state_snapshot and state_snapshot.values:
-                conversation_history = state_snapshot.values.get("conversation_history", [])
-        except Exception as e:
-            # First query in this session - no history available yet
-            pass
+        if frontend_conversation_history:
+            # Frontend sent history (e.g., loaded from saved conversation)
+            conversation_history = frontend_conversation_history
+        else:
+            # Try to retrieve from checkpointer (active session)
+            try:
+                state_snapshot = await search_compiled_agent.aget_state(config)
+                if state_snapshot and state_snapshot.values:
+                    conversation_history = state_snapshot.values.get("conversation_history", [])
+            except Exception as e:
+                # First query in this session - no history available yet
+                pass
 
         inputs = {
             "input": query,
@@ -431,12 +446,18 @@ async def search_endpoint(request_body: SearchRequest, http_request: Request):
 
     effective_session_id = request_body.session_id if request_body.session_id else f"search-{str(uuid.uuid4())}"
 
+    # Convert conversation history to list of dicts if provided
+    conv_history = None
+    if request_body.conversation_history:
+        conv_history = [{"query": turn.query, "response": turn.response} for turn in request_body.conversation_history]
+
     return StreamingResponse(
         search_interaction_stream(
             effective_session_id,
             request_body.query,
             request_body.enabled_tools or [],
             request_body.is_followup or False,
+            conv_history,
             request_body.theme,
             request_body.theme_strategy or "auto",
             request_body.llm_provider,

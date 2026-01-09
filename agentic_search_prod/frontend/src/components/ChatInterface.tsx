@@ -1,9 +1,11 @@
 import { useState, useEffect, useRef } from 'react';
 import { MessageList } from './MessageList';
 import { InputArea } from './InputArea';
+import { HistorySidebar } from './HistorySidebar';
 import { useTheme } from '../contexts/ThemeContext';
 import { useChatContext } from '../contexts/ChatContext';
 import { apiClient } from '../services/api';
+import { historyService } from '../services/historyService';
 import { getBackendUrl } from '../config';
 
 /**
@@ -26,6 +28,7 @@ export function ChatInterface() {
   const [showModelDropdown, setShowModelDropdown] = useState(false);
   const [showToolsDropdown, setShowToolsDropdown] = useState(false);
   const [toolsNotification, setToolsNotification] = useState<string | null>(null);
+  const [showHistorySidebar, setShowHistorySidebar] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const toolsDropdownRef = useRef<HTMLDivElement>(null);
 
@@ -225,6 +228,10 @@ export function ChatInterface() {
   };
 
   const handleLogout = async () => {
+    // Save conversation before logout
+    if (state.messages.length > 0) {
+      await historyService.saveConversation(state.sessionId, state.messages);
+    }
     try {
       await apiClient.logout();
       // Redirect to backend login page after successful logout
@@ -233,6 +240,34 @@ export function ChatInterface() {
 
       // Even if logout API fails, redirect to login
       window.location.href = getBackendUrl('/auth/login');
+    }
+  };
+
+  // Auto-save conversation when messages change
+  useEffect(() => {
+    if (state.messages.length > 0) {
+      const saveTimer = setTimeout(() => {
+        historyService.saveConversation(state.sessionId, state.messages);
+      }, 2000); // Debounce: save 2 seconds after last message
+      return () => clearTimeout(saveTimer);
+    }
+  }, [state.messages, state.sessionId]);
+
+  // Load conversation from history
+  const handleLoadConversation = async (conversationId: string) => {
+    try {
+      const conversation = await historyService.getConversation(conversationId);
+      if (conversation && conversation.messages) {
+        dispatch({
+          type: 'LOAD_CONVERSATION',
+          payload: {
+            sessionId: conversation.id,
+            messages: conversation.messages,
+          },
+        });
+      }
+    } catch (error) {
+      console.error('Error loading conversation:', error);
     }
   };
 
@@ -337,6 +372,13 @@ export function ChatInterface() {
         fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif',
       }}
     >
+      {/* History Sidebar */}
+      <HistorySidebar
+        isOpen={showHistorySidebar}
+        onClose={() => setShowHistorySidebar(false)}
+        onLoadConversation={handleLoadConversation}
+      />
+
       {/* Tools notification toast */}
       {toolsNotification && (
         <div
@@ -400,6 +442,57 @@ export function ChatInterface() {
 
         {/* Bottom Section - All Icons */}
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '12px', marginBottom: '80px' }}>
+          {/* History Section */}
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '2px' }}>
+            <div
+              style={{
+                fontSize: '9px',
+                color: themeColors.textSecondary,
+                fontWeight: '600',
+                textTransform: 'uppercase',
+                letterSpacing: '0.5px',
+              }}
+            >
+              History
+            </div>
+            <button
+              onClick={() => setShowHistorySidebar(true)}
+              title="View History"
+              style={{
+                width: '40px',
+                height: '40px',
+                borderRadius: '10px',
+                border: '1px solid rgba(255, 255, 255, 0.1)',
+                backgroundColor: 'transparent',
+                cursor: 'pointer',
+                fontSize: '20px',
+                transition: 'all 0.3s cubic-bezier(0.16, 1, 0.3, 1)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                color: themeColors.text,
+                willChange: 'transform, background-color, border-color',
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.backgroundColor = '#FF980015';
+                e.currentTarget.style.borderColor = '#FF9800';
+                e.currentTarget.style.transform = 'scale(1.05)';
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.backgroundColor = 'transparent';
+                e.currentTarget.style.borderColor = 'rgba(255, 255, 255, 0.1)';
+                e.currentTarget.style.transform = 'scale(1)';
+              }}
+            >
+              <div style={{ padding: '2.5px', border: '1px solid rgba(255, 152, 0, 0.3)', borderRadius: '6px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="rgba(255, 152, 0, 0.7)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <circle cx="12" cy="12" r="10" />
+                  <polyline points="12 6 12 12 16 14" />
+                </svg>
+              </div>
+            </button>
+          </div>
+
           {/* New Conversation Section */}
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '2px' }}>
             <div
@@ -415,6 +508,10 @@ export function ChatInterface() {
             </div>
             <button
               onClick={async () => {
+                // Save current conversation before starting new one
+                if (state.messages.length > 0) {
+                  await historyService.saveConversation(state.sessionId, state.messages);
+                }
                 // Check tools before new conversation - notify if empty
                 try {
                   await apiClient.refreshTools();

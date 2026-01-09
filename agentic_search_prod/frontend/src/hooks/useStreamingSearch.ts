@@ -76,12 +76,26 @@ export function useStreamingSearch() {
         // Determine if this is a follow-up
         const isFollowup = state.messages.length > 0;
 
+        // Extract conversation history from existing messages (pairs of user/assistant)
+        const conversationHistory: { query: string; response: string }[] = [];
+        for (let i = 0; i < state.messages.length - 1; i += 2) {
+          const userMsg = state.messages[i];
+          const assistantMsg = state.messages[i + 1];
+          if (userMsg?.type === 'user' && assistantMsg?.type === 'assistant') {
+            conversationHistory.push({
+              query: userMsg.content,
+              response: assistantMsg.content,
+            });
+          }
+        }
+
         // Make API request
         const response = await apiClient.search({
           query,
           enabled_tools: state.enabledTools,
           session_id: state.sessionId,
           is_followup: isFollowup,
+          conversation_history: conversationHistory.length > 0 ? conversationHistory : undefined,
           theme: state.theme,
           llm_provider: state.selectedProvider,
           llm_model: state.selectedModel,

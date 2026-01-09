@@ -189,6 +189,15 @@ function chatReducer(state: ChatState, action: ChatAction): ChatState {
         user: state.user,
       };
 
+    case 'LOAD_CONVERSATION':
+      return {
+        ...state,
+        sessionId: action.payload.sessionId,
+        messages: action.payload.messages,
+        isLoading: false,
+        currentStreamingMessageId: null,
+      };
+
     default:
       return state;
   }

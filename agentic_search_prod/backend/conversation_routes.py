@@ -13,7 +13,9 @@ from conversation_store import (
     get_conversations,
     get_conversation,
     delete_conversation,
-    toggle_favorite
+    toggle_favorite,
+    save_preferences,
+    get_preferences
 )
 
 router = APIRouter(prefix="/conversations", tags=["conversations"])
@@ -24,6 +26,11 @@ class SaveConversationRequest(BaseModel):
     conversation_id: str
     messages: List[Dict[str, Any]]
     title: Optional[str] = None
+
+
+class SavePreferencesRequest(BaseModel):
+    """Request body for saving user preferences"""
+    instructions: str
 
 
 @router.get("")
@@ -143,4 +150,39 @@ async def toggle_favorite_endpoint(conversation_id: str, request: Request):
         "success": True,
         "conversation_id": conversation_id,
         "is_favorite": new_status
+    })
+
+
+@router.get("/preferences/me")
+async def get_preferences_endpoint(request: Request):
+    """Get user's agent preferences/instructions"""
+    user = require_auth(request)
+    user_email = user.get("email")
+
+    if not user_email:
+        raise HTTPException(status_code=400, detail="User email not found")
+
+    instructions = get_preferences(user_email)
+
+    return JSONResponse(content={
+        "instructions": instructions or ""
+    })
+
+
+@router.post("/preferences/me")
+async def save_preferences_endpoint(body: SavePreferencesRequest, request: Request):
+    """Save user's agent preferences/instructions"""
+    user = require_auth(request)
+    user_email = user.get("email")
+
+    if not user_email:
+        raise HTTPException(status_code=400, detail="User email not found")
+
+    success = save_preferences(user_email, body.instructions)
+
+    if not success:
+        raise HTTPException(status_code=500, detail="Failed to save preferences")
+
+    return JSONResponse(content={
+        "success": True
     })

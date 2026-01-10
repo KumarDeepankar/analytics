@@ -284,7 +284,7 @@ async def parallel_initialization_node(state: SearchAgentState) -> SearchAgentSt
 
         # SLIDING WINDOW: Keep only the most recent turns to allow continuous conversation
         # When history exceeds limit, truncate oldest turns instead of full reset
-        MAX_HISTORY_TURNS = 3  # Keep last N turns in context (adjust based on token limits)
+        MAX_HISTORY_TURNS = 5  # Keep last N turns in context (adjust based on token limits)
         if len(conversation_history) > MAX_HISTORY_TURNS:
             conversation_history = conversation_history[-MAX_HISTORY_TURNS:]
             # Note: conversation_was_reset stays False since we're preserving context
@@ -406,7 +406,8 @@ async def create_execution_plan_node(state: SearchAgentState) -> SearchAgentStat
         prompt = create_multi_task_planning_prompt(
             user_query=state["input"],
             enabled_tools=enabled_tools_only,
-            conversation_history=state.get("conversation_history", [])
+            conversation_history=state.get("conversation_history", []),
+            user_preferences=state.get("user_preferences")
         )
 
         # Debug: Print full planning prompt
@@ -520,8 +521,23 @@ async def create_execution_plan_node(state: SearchAgentState) -> SearchAgentStat
             state["thinking_steps"].append(f"📋 Plan: {planning_decision.reasoning}")
 
             for i, task in enumerate(tasks):
+                # Log full tool arguments for debugging (not visible to user)
                 args_str = ", ".join([f"{k}={repr(v)}" for k, v in task.tool_arguments.items()])
-                state["thinking_steps"].append(f"   Tool {i + 1}: {task.tool_name}({args_str})")
+                logger.info(f"Tool {i + 1}: {task.tool_name}({args_str})")
+
+                # Show only filter terms in natural language to user
+                filter_desc = ""
+                if "filters" in task.tool_arguments:
+                    try:
+                        filters = task.tool_arguments["filters"]
+                        if isinstance(filters, str):
+                            filters = json.loads(filters)
+                        if isinstance(filters, dict) and filters:
+                            filter_parts = [f"{k.replace('_', ' ')}: {v}" for k, v in filters.items()]
+                            filter_desc = f"searching on {', '.join(filter_parts)}"
+                    except:
+                        pass
+                state["thinking_steps"].append(f"   Tool {i + 1}: {filter_desc or task.tool_name}")
 
     except Exception as e:
         logger.error(f"Error creating execution plan: {e}")
@@ -684,7 +700,8 @@ async def gather_and_synthesize_node(state: SearchAgentState) -> SearchAgentStat
         prompt = create_information_synthesis_prompt(
             user_query=state["input"],
             gathered_information=synthesis_data,
-            conversation_history=state.get("conversation_history", [])
+            conversation_history=state.get("conversation_history", []),
+            user_preferences=state.get("user_preferences")
         )
 
         # Debug: Print full synthesis prompt

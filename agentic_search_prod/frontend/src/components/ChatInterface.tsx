@@ -29,6 +29,9 @@ export function ChatInterface() {
   const [showToolsDropdown, setShowToolsDropdown] = useState(false);
   const [toolsNotification, setToolsNotification] = useState<string | null>(null);
   const [showHistorySidebar, setShowHistorySidebar] = useState(false);
+  const [showPreferencesPanel, setShowPreferencesPanel] = useState(false);
+  const [userInstructions, setUserInstructions] = useState('');
+  const [instructionsSaving, setInstructionsSaving] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const toolsDropdownRef = useRef<HTMLDivElement>(null);
 
@@ -79,6 +82,19 @@ export function ChatInterface() {
 
     loadUserProfile();
   }, [dispatch]);
+
+  // Load user preferences on mount
+  useEffect(() => {
+    async function loadPreferences() {
+      try {
+        const instructions = await historyService.getPreferences();
+        setUserInstructions(instructions);
+      } catch (error) {
+        console.error('Failed to load preferences:', error);
+      }
+    }
+    loadPreferences();
+  }, []);
 
   // Load available models on mount
   useEffect(() => {
@@ -243,6 +259,18 @@ export function ChatInterface() {
     }
   };
 
+  const handleSavePreferences = async () => {
+    setInstructionsSaving(true);
+    try {
+      await historyService.savePreferences(userInstructions);
+      setShowPreferencesPanel(false);
+    } catch (error) {
+      console.error('Failed to save preferences:', error);
+    } finally {
+      setInstructionsSaving(false);
+    }
+  };
+
   // Auto-save conversation when messages change
   useEffect(() => {
     if (state.messages.length > 0) {
@@ -379,6 +407,110 @@ export function ChatInterface() {
         onLoadConversation={handleLoadConversation}
       />
 
+      {/* Preferences Panel */}
+      {showPreferencesPanel && (
+        <>
+          {/* Backdrop */}
+          <div
+            onClick={() => setShowPreferencesPanel(false)}
+            style={{
+              position: 'fixed',
+              inset: 0,
+              backgroundColor: 'rgba(0, 0, 0, 0.3)',
+              zIndex: 999,
+            }}
+          />
+          {/* Panel */}
+          <div
+            style={{
+              position: 'fixed',
+              left: '72px',
+              top: '16px',
+              bottom: '16px',
+              width: '350px',
+              backgroundColor: themeColors.surface,
+              borderRadius: '16px',
+              boxShadow: '0 8px 32px rgba(0, 0, 0, 0.2)',
+              zIndex: 1000,
+              display: 'flex',
+              flexDirection: 'column',
+              overflow: 'hidden',
+            }}
+          >
+            {/* Header */}
+            <div
+              style={{
+                padding: '16px 20px',
+                borderBottom: `1px solid ${themeColors.border}`,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+              }}
+            >
+              <h3 style={{ margin: 0, fontSize: '16px', fontWeight: '600', color: themeColors.text }}>
+                Agent Instructions
+              </h3>
+              <button
+                onClick={() => setShowPreferencesPanel(false)}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  cursor: 'pointer',
+                  padding: '4px',
+                  color: themeColors.textSecondary,
+                }}
+              >
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <line x1="18" y1="6" x2="6" y2="18" />
+                  <line x1="6" y1="6" x2="18" y2="18" />
+                </svg>
+              </button>
+            </div>
+
+            {/* Content */}
+            <div style={{ flex: 1, padding: '20px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+              <p style={{ margin: 0, fontSize: '13px', color: themeColors.textSecondary }}>
+                Provide instructions for the agent. These will be applied to all your conversations.
+              </p>
+              <textarea
+                value={userInstructions}
+                onChange={(e) => setUserInstructions(e.target.value)}
+                placeholder="e.g., Always show results in table format. Focus on India region by default."
+                style={{
+                  flex: 1,
+                  padding: '12px',
+                  borderRadius: '8px',
+                  border: `1px solid ${themeColors.border}`,
+                  backgroundColor: themeColors.background,
+                  color: themeColors.text,
+                  fontSize: '13px',
+                  resize: 'none',
+                  outline: 'none',
+                  fontFamily: 'inherit',
+                }}
+              />
+              <button
+                onClick={handleSavePreferences}
+                disabled={instructionsSaving}
+                style={{
+                  padding: '10px 16px',
+                  borderRadius: '8px',
+                  border: 'none',
+                  backgroundColor: '#9C27B0',
+                  color: 'white',
+                  fontSize: '13px',
+                  fontWeight: '500',
+                  cursor: instructionsSaving ? 'not-allowed' : 'pointer',
+                  opacity: instructionsSaving ? 0.7 : 1,
+                }}
+              >
+                {instructionsSaving ? 'Saving...' : 'Save Instructions'}
+              </button>
+            </div>
+          </div>
+        </>
+      )}
+
       {/* Tools notification toast */}
       {toolsNotification && (
         <div
@@ -488,6 +620,57 @@ export function ChatInterface() {
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="rgba(255, 152, 0, 0.7)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <circle cx="12" cy="12" r="10" />
                   <polyline points="12 6 12 12 16 14" />
+                </svg>
+              </div>
+            </button>
+          </div>
+
+          {/* Preferences Section */}
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '2px' }}>
+            <div
+              style={{
+                fontSize: '9px',
+                color: themeColors.textSecondary,
+                fontWeight: '600',
+                textTransform: 'uppercase',
+                letterSpacing: '0.5px',
+              }}
+            >
+              Agent
+            </div>
+            <button
+              onClick={() => setShowPreferencesPanel(true)}
+              title="Agent Preferences"
+              style={{
+                width: '40px',
+                height: '40px',
+                borderRadius: '10px',
+                border: '1px solid rgba(255, 255, 255, 0.1)',
+                backgroundColor: 'transparent',
+                cursor: 'pointer',
+                fontSize: '20px',
+                transition: 'all 0.3s cubic-bezier(0.16, 1, 0.3, 1)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                color: themeColors.text,
+                willChange: 'transform, background-color, border-color',
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.backgroundColor = '#9C27B015';
+                e.currentTarget.style.borderColor = '#9C27B0';
+                e.currentTarget.style.transform = 'scale(1.05)';
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.backgroundColor = 'transparent';
+                e.currentTarget.style.borderColor = 'rgba(255, 255, 255, 0.1)';
+                e.currentTarget.style.transform = 'scale(1)';
+              }}
+            >
+              <div style={{ padding: '2.5px', border: '1px solid rgba(156, 39, 176, 0.3)', borderRadius: '6px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="rgba(156, 39, 176, 0.7)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <circle cx="12" cy="12" r="3" />
+                  <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
                 </svg>
               </div>
             </button>

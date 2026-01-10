@@ -67,6 +67,15 @@ def init_db():
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_conv_user ON conversations(user_email)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_msg_conv ON messages(conversation_id)")
 
+        # User preferences table - stores agent instructions
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS user_preferences (
+                user_email TEXT PRIMARY KEY,
+                instructions TEXT,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
         conn.commit()
         logger.info("Conversation database initialized")
 
@@ -318,6 +327,59 @@ def toggle_favorite(conversation_id: str, user_email: str) -> Optional[bool]:
 
     except Exception as e:
         logger.error(f"Error toggling favorite: {e}")
+        return None
+
+
+def save_preferences(user_email: str, instructions: str) -> bool:
+    """
+    Save user preferences/instructions for the agent
+
+    Args:
+        user_email: User's email address
+        instructions: User's instructions for the agent
+
+    Returns:
+        True if successful, False otherwise
+    """
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO user_preferences (user_email, instructions, updated_at)
+                VALUES (?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(user_email) DO UPDATE SET
+                    instructions = excluded.instructions,
+                    updated_at = CURRENT_TIMESTAMP
+            """, (user_email, instructions))
+            conn.commit()
+            logger.info(f"Saved preferences for {user_email}")
+            return True
+    except Exception as e:
+        logger.error(f"Error saving preferences: {e}")
+        return False
+
+
+def get_preferences(user_email: str) -> Optional[str]:
+    """
+    Get user preferences/instructions
+
+    Args:
+        user_email: User's email address
+
+    Returns:
+        User's instructions string, or None if not found
+    """
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT instructions FROM user_preferences
+                WHERE user_email = ?
+            """, (user_email,))
+            row = cursor.fetchone()
+            return row["instructions"] if row else None
+    except Exception as e:
+        logger.error(f"Error getting preferences: {e}")
         return None
 
 

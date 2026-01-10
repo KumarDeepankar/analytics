@@ -42,11 +42,25 @@ def format_conversation_context(conversation_history: List[Dict[str, Any]], max_
 def create_multi_task_planning_prompt(
     user_query: str,
     enabled_tools: List[Dict[str, Any]],
-    conversation_history: List[Dict[str, Any]] = None
+    conversation_history: List[Dict[str, Any]] = None,
+    user_preferences: str = None
 ) -> str:
     """Optimized planning prompt with Markdown tool definitions for better LLM comprehension"""
 
     context = format_conversation_context(conversation_history, max_turns=2) if conversation_history else ""
+
+    # Add user preferences section if available
+    preferences_section = ""
+    if user_preferences and user_preferences.strip():
+        preferences_section = f"""
+# User Preferences
+
+The user has specified the following preferences. Apply these to your response:
+
+{user_preferences}
+
+---
+"""
 
     # Add follow-up query instructions when there's conversation history
     followup_instructions = ""
@@ -127,7 +141,7 @@ def create_multi_task_planning_prompt(
 {tools_md}
 
 ---
-{followup_instructions}
+{preferences_section}{followup_instructions}
 # Query
 
 {user_query}
@@ -178,7 +192,8 @@ Return a PlanningDecision JSON with: `decision_type`, `reasoning`
 def create_information_synthesis_prompt(
     user_query: str,
     gathered_information: Dict[str, Any],
-    conversation_history: List[Dict[str, Any]] = None
+    conversation_history: List[Dict[str, Any]] = None,
+    user_preferences: str = None
 ) -> str:
     """
     Modern synthesis prompt - LLM generates markdown, client renders with themes.
@@ -187,6 +202,15 @@ def create_information_synthesis_prompt(
 
     context = format_conversation_context(conversation_history, max_turns=2)
     results = gathered_information.get("task_results", [])
+
+    # Add user preferences if available
+    preferences_section = ""
+    if user_preferences and user_preferences.strip():
+        preferences_section = f"""
+# User Preferences
+
+{user_preferences}
+"""
 
     # Pass full tool results - LLM can extract relevant facts better than manual parsing
     # This works with ANY tool schema, preserves context, and avoids brittle parsing logic
@@ -206,7 +230,7 @@ def create_information_synthesis_prompt(
 
 {user_query}
 {context}
-
+{preferences_section}
 # Tool Results
 
 {results_json}

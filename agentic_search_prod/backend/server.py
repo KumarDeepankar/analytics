@@ -59,6 +59,7 @@ from auth import (
 from auth_routes import router as auth_router
 from debug_auth import router as debug_auth_router
 from conversation_routes import router as conversation_router
+from conversation_store import get_preferences
 
 
 # Modern FastAPI lifespan event handler (replaces deprecated on_event)
@@ -246,7 +247,8 @@ async def search_interaction_stream(
     theme: Optional[str] = None,
     theme_strategy: str = "auto",
     llm_provider: Optional[str] = None,
-    llm_model: Optional[str] = None
+    llm_model: Optional[str] = None,
+    user_preferences: Optional[str] = None
 ) -> AsyncGenerator[str, None]:
     """Stream search agent interaction"""
 
@@ -282,6 +284,7 @@ async def search_interaction_stream(
             "theme_strategy": theme_strategy,  # Theme selection strategy
             "llm_provider": llm_provider,  # LLM provider selection
             "llm_model": llm_model,  # LLM model selection
+            "user_preferences": user_preferences,  # User's agent instructions
         }
 
         relevant_node_names = [
@@ -446,6 +449,10 @@ async def search_endpoint(request_body: SearchRequest, http_request: Request):
 
     effective_session_id = request_body.session_id if request_body.session_id else f"search-{str(uuid.uuid4())}"
 
+    # Fetch user preferences
+    user_email = user.get("email")
+    user_preferences = get_preferences(user_email) if user_email else None
+
     # Convert conversation history to list of dicts if provided
     conv_history = None
     if request_body.conversation_history:
@@ -461,7 +468,8 @@ async def search_endpoint(request_body: SearchRequest, http_request: Request):
             request_body.theme,
             request_body.theme_strategy or "auto",
             request_body.llm_provider,
-            request_body.llm_model
+            request_body.llm_model,
+            user_preferences
         ),
         media_type="text/plain"
     )

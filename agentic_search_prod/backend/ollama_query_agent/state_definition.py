@@ -102,6 +102,9 @@ class SearchAgentState(TypedDict):
     llm_provider: Optional[str]  # "anthropic" or "ollama"
     llm_model: Optional[str]     # Model name specific to the provider
 
+    # User preferences
+    user_preferences: Optional[str]  # User's agent instructions
+
     # Multi-task planning and execution
     execution_plan: Optional[ExecutionPlan]
     current_task_index: int

@@ -108,6 +108,38 @@ class HistoryService {
     const data = await response.json();
     return data.is_favorite;
   }
+
+  /**
+   * Get user's agent preferences/instructions
+   */
+  async getPreferences(): Promise<string> {
+    const response = await fetch(getBackendUrl('/conversations/preferences/me'), {
+      credentials: 'include',
+    });
+
+    if (!response.ok) {
+      return '';
+    }
+
+    const data = await response.json();
+    return data.instructions || '';
+  }
+
+  /**
+   * Save user's agent preferences/instructions
+   */
+  async savePreferences(instructions: string): Promise<boolean> {
+    const response = await fetch(getBackendUrl('/conversations/preferences/me'), {
+      method: 'POST',
+      credentials: 'include',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ instructions }),
+    });
+
+    return response.ok;
+  }
 }
 
 export const historyService = new HistoryService();

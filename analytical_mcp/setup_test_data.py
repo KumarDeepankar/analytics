@@ -8,12 +8,16 @@ import ssl
 import aiohttp
 import os
 import json
+from pathlib import Path
 
 # Configuration
 OPENSEARCH_URL = os.getenv("OPENSEARCH_URL", "http://localhost:9200")
 OPENSEARCH_USERNAME = os.getenv("OPENSEARCH_USERNAME", "admin")
 OPENSEARCH_PASSWORD = os.getenv("OPENSEARCH_PASSWORD", "admin")
 INDEX_NAME = os.getenv("INDEX_NAME", "events_analytics_v4")
+
+# Mapping file path (same directory as this script)
+MAPPING_FILE = Path(__file__).parent / "mapping_analytical.json"
 
 
 async def opensearch_request(method: str, path: str, body: dict = None) -> dict:
@@ -109,6 +113,46 @@ EXPECTED_COUNTS = {
         "United States of America": 1,  # FUZZY002
     }
 }
+
+
+async def ensure_index_with_mapping():
+    """Ensure index exists with proper mapping from mapping_analytical.json."""
+    print("Ensuring index exists with proper mapping...")
+
+    # Load mapping from file
+    if not MAPPING_FILE.exists():
+        print(f"  ERROR: Mapping file not found: {MAPPING_FILE}")
+        return False
+
+    with open(MAPPING_FILE, 'r') as f:
+        mapping = json.load(f)
+    print(f"  Loaded mapping from {MAPPING_FILE.name}")
+
+    # Check if index exists
+    try:
+        result = await opensearch_request("GET", INDEX_NAME)
+        index_exists = True
+        print(f"  Index '{INDEX_NAME}' exists, will be recreated with proper mapping")
+    except Exception:
+        index_exists = False
+        print(f"  Index '{INDEX_NAME}' does not exist, will be created")
+
+    # Delete index if it exists (to ensure clean mapping)
+    if index_exists:
+        try:
+            await opensearch_request("DELETE", INDEX_NAME)
+            print(f"  Deleted existing index '{INDEX_NAME}'")
+        except Exception as e:
+            print(f"  Warning: Could not delete index: {e}")
+
+    # Create index with mapping
+    try:
+        await opensearch_request("PUT", INDEX_NAME, mapping)
+        print(f"  Created index '{INDEX_NAME}' with mapping from {MAPPING_FILE.name}")
+        return True
+    except Exception as e:
+        print(f"  ERROR: Could not create index: {e}")
+        return False
 
 
 async def delete_test_data():
@@ -284,9 +328,13 @@ async def main():
     print("=" * 70)
     print(f"\nOpenSearch: {OPENSEARCH_URL}")
     print(f"Index: {INDEX_NAME}")
+    print(f"Mapping: {MAPPING_FILE}")
 
-    # Delete existing test data
-    await delete_test_data()
+    # Ensure index exists with proper mapping (deletes and recreates if exists)
+    mapping_ok = await ensure_index_with_mapping()
+    if not mapping_ok:
+        print("\nERROR: Failed to create index with mapping. Aborting.")
+        return False
 
     # Insert new test data
     await insert_test_data()

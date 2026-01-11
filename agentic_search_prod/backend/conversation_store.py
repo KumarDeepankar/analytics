@@ -67,6 +67,16 @@ def init_db():
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_conv_user ON conversations(user_email)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_msg_conv ON messages(conversation_id)")
 
+        # Add feedback columns to messages table (migration for existing DBs)
+        try:
+            cursor.execute("ALTER TABLE messages ADD COLUMN feedback_rating INTEGER")
+        except sqlite3.OperationalError:
+            pass  # Column already exists
+        try:
+            cursor.execute("ALTER TABLE messages ADD COLUMN feedback_text TEXT")
+        except sqlite3.OperationalError:
+            pass  # Column already exists
+
         # User preferences table - stores agent instructions
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS user_preferences (
@@ -218,7 +228,7 @@ def get_conversation(conversation_id: str, user_email: str) -> Optional[Dict[str
 
             # Get messages
             cursor.execute("""
-                SELECT id, type, content, timestamp, metadata
+                SELECT id, type, content, timestamp, metadata, feedback_rating, feedback_text
                 FROM messages
                 WHERE conversation_id = ?
                 ORDER BY timestamp ASC
@@ -239,6 +249,11 @@ def get_conversation(conversation_id: str, user_email: str) -> Optional[Dict[str
                         msg.update(metadata)
                     except json.JSONDecodeError:
                         pass
+                # Add feedback fields if present (using camelCase for frontend)
+                if row["feedback_rating"]:
+                    msg["feedbackRating"] = row["feedback_rating"]
+                if row["feedback_text"]:
+                    msg["feedbackText"] = row["feedback_text"]
                 messages.append(msg)
 
             return {
@@ -380,6 +395,98 @@ def get_preferences(user_email: str) -> Optional[str]:
             return row["instructions"] if row else None
     except Exception as e:
         logger.error(f"Error getting preferences: {e}")
+        return None
+
+
+def save_feedback(
+    message_id: str,
+    conversation_id: str,
+    user_email: str,
+    rating: int,
+    feedback_text: Optional[str] = None
+) -> bool:
+    """
+    Save feedback for a message (assistant response)
+
+    Args:
+        message_id: ID of the message being rated
+        conversation_id: Conversation ID (for authorization check)
+        user_email: User's email (for authorization check)
+        rating: Star rating (1-5)
+        feedback_text: Optional feedback comment
+
+    Returns:
+        True if successful, False otherwise
+    """
+    # Validate rating
+    if not 1 <= rating <= 5:
+        logger.error(f"Invalid rating: {rating}. Must be 1-5.")
+        return False
+
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+
+            # Verify the conversation belongs to the user
+            cursor.execute("""
+                SELECT id FROM conversations
+                WHERE id = ? AND user_email = ?
+            """, (conversation_id, user_email))
+
+            if not cursor.fetchone():
+                logger.error(f"Conversation {conversation_id} not found for user {user_email}")
+                return False
+
+            # Update message with feedback
+            cursor.execute("""
+                UPDATE messages
+                SET feedback_rating = ?, feedback_text = ?
+                WHERE id = ? AND conversation_id = ?
+            """, (rating, feedback_text, message_id, conversation_id))
+
+            if cursor.rowcount == 0:
+                logger.error(f"Message {message_id} not found in conversation {conversation_id}")
+                return False
+
+            conn.commit()
+            logger.info(f"Saved feedback for message {message_id}: {rating} stars")
+            return True
+
+    except Exception as e:
+        logger.error(f"Error saving feedback: {e}")
+        return False
+
+
+def get_feedback(message_id: str, conversation_id: str) -> Optional[Dict[str, Any]]:
+    """
+    Get feedback for a specific message
+
+    Args:
+        message_id: ID of the message
+        conversation_id: Conversation ID
+
+    Returns:
+        Feedback dict with rating and text, or None if not found
+    """
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT feedback_rating, feedback_text
+                FROM messages
+                WHERE id = ? AND conversation_id = ?
+            """, (message_id, conversation_id))
+
+            row = cursor.fetchone()
+            if row and row["feedback_rating"]:
+                return {
+                    "rating": row["feedback_rating"],
+                    "text": row["feedback_text"]
+                }
+            return None
+
+    except Exception as e:
+        logger.error(f"Error getting feedback: {e}")
         return None
 
 

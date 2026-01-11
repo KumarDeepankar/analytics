@@ -54,6 +54,8 @@ export interface Message {
   processingSteps?: ProcessingStep[];
   sources?: Source[];
   charts?: ChartConfig[];
+  feedbackRating?: number;  // 1-5 star rating
+  feedbackText?: string;    // Optional feedback comment
 }
 
 export interface ChatState {

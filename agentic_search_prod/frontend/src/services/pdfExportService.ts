@@ -73,14 +73,18 @@ export async function exportToPdf(options: ExportOptions): Promise<boolean> {
         }
       });
 
-      // Hide agent thinking sections and tabs in the clone
+      // Hide agent thinking sections, tabs, and feedback ratings in the clone
       const thinkingSections = clone.querySelectorAll('.processing-chain');
       const tabSections = clone.querySelectorAll('.conversation-tabs');
+      const feedbackSections = clone.querySelectorAll('.feedback-rating');
 
       thinkingSections.forEach((el) => {
         (el as HTMLElement).style.display = 'none';
       });
       tabSections.forEach((el) => {
+        (el as HTMLElement).style.display = 'none';
+      });
+      feedbackSections.forEach((el) => {
         (el as HTMLElement).style.display = 'none';
       });
 
@@ -112,8 +116,8 @@ export async function exportToPdf(options: ExportOptions): Promise<boolean> {
       const imgWidth = contentWidth;
       const ratio = imgWidth / conversationCanvas.width;
 
-      // Add padding at page breaks to reduce text cutting (15mm safe zone)
-      const pageBreakPadding = 15;
+      // Add padding at page breaks to reduce text cutting (25mm safe zone)
+      const pageBreakPadding = 25;
 
       // Calculate page heights with padding
       const firstPageContentHeight = contentHeight - 20 - pageBreakPadding;

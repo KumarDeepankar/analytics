@@ -140,6 +140,32 @@ class HistoryService {
 
     return response.ok;
   }
+
+  /**
+   * Save feedback for a message (star rating + optional text)
+   */
+  async saveFeedback(
+    messageId: string,
+    conversationId: string,
+    rating: number,
+    feedbackText?: string
+  ): Promise<boolean> {
+    const response = await fetch(getBackendUrl('/conversations/feedback'), {
+      method: 'POST',
+      credentials: 'include',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        message_id: messageId,
+        conversation_id: conversationId,
+        rating: rating,
+        feedback_text: feedbackText,
+      }),
+    });
+
+    return response.ok;
+  }
 }
 
 export const historyService = new HistoryService();

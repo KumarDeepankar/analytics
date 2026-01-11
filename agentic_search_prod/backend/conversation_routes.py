@@ -15,7 +15,8 @@ from conversation_store import (
     delete_conversation,
     toggle_favorite,
     save_preferences,
-    get_preferences
+    get_preferences,
+    save_feedback
 )
 
 router = APIRouter(prefix="/conversations", tags=["conversations"])
@@ -31,6 +32,14 @@ class SaveConversationRequest(BaseModel):
 class SavePreferencesRequest(BaseModel):
     """Request body for saving user preferences"""
     instructions: str
+
+
+class SaveFeedbackRequest(BaseModel):
+    """Request body for saving message feedback"""
+    message_id: str
+    conversation_id: str
+    rating: int  # 1-5 stars
+    feedback_text: Optional[str] = None
 
 
 @router.get("")
@@ -185,4 +194,39 @@ async def save_preferences_endpoint(body: SavePreferencesRequest, request: Reque
 
     return JSONResponse(content={
         "success": True
+    })
+
+
+@router.post("/feedback")
+async def save_feedback_endpoint(body: SaveFeedbackRequest, request: Request):
+    """
+    Save feedback for a message (star rating + optional text)
+
+    Rating must be 1-5 stars
+    """
+    user = require_auth(request)
+    user_email = user.get("email")
+
+    if not user_email:
+        raise HTTPException(status_code=400, detail="User email not found")
+
+    # Validate rating
+    if not 1 <= body.rating <= 5:
+        raise HTTPException(status_code=400, detail="Rating must be between 1 and 5")
+
+    success = save_feedback(
+        message_id=body.message_id,
+        conversation_id=body.conversation_id,
+        user_email=user_email,
+        rating=body.rating,
+        feedback_text=body.feedback_text
+    )
+
+    if not success:
+        raise HTTPException(status_code=500, detail="Failed to save feedback")
+
+    return JSONResponse(content={
+        "success": True,
+        "message_id": body.message_id,
+        "rating": body.rating
     })

@@ -4,18 +4,20 @@ import { Message } from './Message';
 import { useTheme } from '../contexts/ThemeContext';
 import { ProcessingChain } from './ProcessingChain';
 import { ChartDisplay } from './ChartDisplay';
+import { FeedbackRating } from './FeedbackRating';
 
 interface ConversationTurnProps {
   userMessage: MessageType;
   assistantMessage: MessageType;
   isLatest: boolean;
+  conversationId: string;
 }
 
 /**
  * A conversation turn containing user query + assistant response
  * Treated as a single visual unit for cleaner separation
  */
-export const ConversationTurn = memo(({ userMessage, assistantMessage, isLatest }: ConversationTurnProps) => {
+export const ConversationTurn = memo(({ userMessage, assistantMessage, isLatest, conversationId }: ConversationTurnProps) => {
   const { themeColors } = useTheme();
   // Tab state: 'thinking' | 'visualization' | 'sources'
   const [activeTab, setActiveTab] = useState<'thinking' | 'visualization' | 'sources'>('thinking');
@@ -324,6 +326,16 @@ export const ConversationTurn = memo(({ userMessage, assistantMessage, isLatest 
       {/* Assistant Message - Always visible at bottom */}
       <div style={{ marginBottom: '0' }}>
         <Message message={assistantMessage} hideProcessingSteps={true} />
+
+        {/* Feedback Rating - Only show when response is complete */}
+        {assistantMessage.content && !assistantMessage.isStreaming && (
+          <FeedbackRating
+            messageId={assistantMessage.id}
+            conversationId={conversationId}
+            existingRating={assistantMessage.feedbackRating}
+            existingFeedbackText={assistantMessage.feedbackText}
+          />
+        )}
       </div>
     </div>
   );

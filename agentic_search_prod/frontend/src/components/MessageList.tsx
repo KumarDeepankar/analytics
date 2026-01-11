@@ -147,6 +147,7 @@ export function MessageList() {
                   userMessage={turn.user}
                   assistantMessage={turn.assistant}
                   isLatest={isLatestTurn}
+                  conversationId={state.sessionId}
                 />
               </div>
             );

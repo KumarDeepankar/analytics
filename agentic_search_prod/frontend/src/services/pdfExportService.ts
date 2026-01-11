@@ -56,20 +56,20 @@ export async function exportToPdf(options: ExportOptions): Promise<boolean> {
       // Append clone to body for rendering
       document.body.appendChild(clone);
 
-      // Copy canvas content from original to clone (Chart.js renders to canvas)
+      // Convert canvas to img for proper scaling (Chart.js canvas has fixed size)
       const originalCanvases = conversationElement.querySelectorAll('canvas');
       const clonedCanvases = clone.querySelectorAll('canvas');
       originalCanvases.forEach((originalCanvas, index) => {
         if (clonedCanvases[index]) {
           const clonedCanvas = clonedCanvases[index] as HTMLCanvasElement;
-          const ctx = clonedCanvas.getContext('2d');
-          if (ctx) {
-            // Match dimensions
-            clonedCanvas.width = originalCanvas.width;
-            clonedCanvas.height = originalCanvas.height;
-            // Copy the drawn content
-            ctx.drawImage(originalCanvas, 0, 0);
-          }
+          // Create an img element from canvas data
+          const img = document.createElement('img');
+          img.src = originalCanvas.toDataURL('image/png');
+          img.style.width = '100%';
+          img.style.height = 'auto';
+          img.style.maxWidth = '100%';
+          // Replace canvas with img for proper scaling
+          clonedCanvas.parentNode?.replaceChild(img, clonedCanvas);
         }
       });
 
@@ -92,9 +92,32 @@ export async function exportToPdf(options: ExportOptions): Promise<boolean> {
       const chartContainers = clone.querySelectorAll('#chart-container');
       chartContainers.forEach((el) => {
         const htmlEl = el as HTMLElement;
-        htmlEl.style.overflow = 'visible';
-        htmlEl.style.overflowX = 'visible';
-        htmlEl.style.width = 'auto';
+        const chartCards = htmlEl.querySelectorAll(':scope > div');
+        const cardCount = chartCards.length;
+
+        // Only shrink to fit if more than 2 charts (otherwise they fit naturally)
+        if (cardCount > 2) {
+          htmlEl.style.overflow = 'visible';
+          htmlEl.style.overflowX = 'visible';
+          htmlEl.style.display = 'flex';
+          htmlEl.style.flexDirection = 'row';
+          htmlEl.style.flexWrap = 'nowrap';
+          htmlEl.style.gap = '8px';
+          htmlEl.style.width = '100%';
+
+          // Make individual chart cards shrink to fit
+          chartCards.forEach((card) => {
+            const cardEl = card as HTMLElement;
+            cardEl.style.minWidth = '0';
+            cardEl.style.maxWidth = 'none';
+            cardEl.style.flex = '1 1 0';
+            cardEl.style.width = `calc(${100 / cardCount}% - 8px)`;
+          });
+        } else {
+          // 1-2 charts: just ensure they're visible (no shrinking needed)
+          htmlEl.style.overflow = 'visible';
+          htmlEl.style.overflowX = 'visible';
+        }
       });
 
       // Small delay for reflow

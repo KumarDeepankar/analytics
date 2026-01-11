@@ -13,6 +13,7 @@ export interface ExportOptions {
 
 /**
  * Export conversation (and optionally chart) to PDF
+ * Order: Header -> Chart (if visible) -> Conversation
  */
 export async function exportToPdf(options: ExportOptions): Promise<boolean> {
   const {
@@ -27,19 +28,66 @@ export async function exportToPdf(options: ExportOptions): Promise<boolean> {
     const pageHeight = pdf.internal.pageSize.getHeight();
     const margin = 10;
     const contentWidth = pageWidth - (margin * 2);
-    let yOffset = margin;
+    const contentHeight = pageHeight - (margin * 2);
 
-    // Add title
+    // Add header on first page
     pdf.setFontSize(16);
-    pdf.text('Agentic Search Conversation', margin, yOffset);
-    yOffset += 10;
-
-    // Add timestamp
+    pdf.text('Agentic Search Conversation', margin, margin + 5);
     pdf.setFontSize(10);
-    pdf.text(`Exported: ${new Date().toLocaleString()}`, margin, yOffset);
-    yOffset += 10;
+    pdf.text(`Exported: ${new Date().toLocaleString()}`, margin, margin + 12);
 
-    // Capture conversation
+    let yOffset = margin + 20; // Start after header
+
+    // 1. Capture chart first (if visible)
+    const chartElement = document.getElementById(chartElementId);
+    if (chartElement && chartElement.offsetParent !== null) {
+      // Store original styles to restore later
+      const originalOverflow = chartElement.style.overflow;
+      const originalOverflowX = chartElement.style.overflowX;
+      const originalWidth = chartElement.style.width;
+
+      // Expand container to show all charts
+      chartElement.style.overflow = 'visible';
+      chartElement.style.overflowX = 'visible';
+      chartElement.style.width = `${chartElement.scrollWidth}px`;
+
+      await new Promise(resolve => setTimeout(resolve, 50));
+
+      const chartCanvas = await html2canvas(chartElement, {
+        scale: 2,
+        useCORS: true,
+        logging: false,
+        backgroundColor: '#ffffff',
+        width: chartElement.scrollWidth
+      });
+
+      // Restore original styles
+      chartElement.style.overflow = originalOverflow;
+      chartElement.style.overflowX = originalOverflowX;
+      chartElement.style.width = originalWidth;
+
+      if (chartCanvas.width > 0 && chartCanvas.height > 0) {
+        const chartImg = chartCanvas.toDataURL('image/png');
+        const chartWidth = contentWidth;
+        const chartHeight = (chartCanvas.height * chartWidth) / chartCanvas.width;
+        const maxChartHeight = contentHeight - yOffset - margin;
+
+        pdf.addImage(
+          chartImg,
+          'PNG',
+          margin,
+          yOffset,
+          chartWidth,
+          Math.min(chartHeight, maxChartHeight),
+          undefined,
+          'FAST'
+        );
+
+        yOffset += Math.min(chartHeight, maxChartHeight) + 10; // Add spacing after chart
+      }
+    }
+
+    // 2. Capture conversation
     const conversationElement = document.getElementById(conversationElementId);
     if (conversationElement) {
       // Hide agent thinking sections and tabs before capture
@@ -57,7 +105,9 @@ export async function exportToPdf(options: ExportOptions): Promise<boolean> {
         scale: 2,
         useCORS: true,
         logging: false,
-        backgroundColor: '#ffffff'
+        backgroundColor: '#ffffff',
+        windowHeight: conversationElement.scrollHeight,
+        height: conversationElement.scrollHeight
       });
 
       // Restore agent thinking sections and tabs after capture
@@ -68,72 +118,61 @@ export async function exportToPdf(options: ExportOptions): Promise<boolean> {
         (el as HTMLElement).style.display = '';
       });
 
-      const conversationImg = conversationCanvas.toDataURL('image/png');
+      // Calculate dimensions
       const imgWidth = contentWidth;
-      const imgHeight = (conversationCanvas.height * imgWidth) / conversationCanvas.width;
+      const ratio = imgWidth / conversationCanvas.width;
 
-      // Handle multi-page for long conversations
-      let remainingHeight = imgHeight;
+      // Calculate remaining space on first page after chart
+      const firstPageRemainingHeight = contentHeight - yOffset + margin;
+      const firstPageCanvasHeight = firstPageRemainingHeight / ratio;
+      const regularPageCanvasHeight = contentHeight / ratio;
+
       let sourceY = 0;
+      let remainingCanvasHeight = conversationCanvas.height;
+      let isFirstConversationPage = true;
 
-      while (remainingHeight > 0) {
-        const availableHeight = pageHeight - yOffset - margin;
-        const sliceHeight = Math.min(remainingHeight, availableHeight);
-        const sliceRatio = sliceHeight / imgHeight;
+      while (remainingCanvasHeight > 0) {
+        const pageCanvasHeight = isFirstConversationPage ? firstPageCanvasHeight : regularPageCanvasHeight;
+        const sliceHeight = Math.min(remainingCanvasHeight, pageCanvasHeight);
 
-        if (sourceY > 0) {
+        // Add new page if not first conversation segment
+        if (!isFirstConversationPage) {
           pdf.addPage();
           yOffset = margin;
         }
 
-        pdf.addImage(
-          conversationImg,
-          'PNG',
-          margin,
-          yOffset,
-          imgWidth,
-          sliceHeight,
-          undefined,
-          'FAST'
-        );
+        // Create a temporary canvas for this slice
+        const sliceCanvas = document.createElement('canvas');
+        sliceCanvas.width = conversationCanvas.width;
+        sliceCanvas.height = sliceHeight;
+        const ctx = sliceCanvas.getContext('2d');
 
-        remainingHeight -= sliceHeight;
-        sourceY += sliceRatio * conversationCanvas.height;
-        yOffset += sliceHeight;
+        if (ctx) {
+          ctx.drawImage(
+            conversationCanvas,
+            0, sourceY, conversationCanvas.width, sliceHeight,
+            0, 0, conversationCanvas.width, sliceHeight
+          );
+
+          const sliceImg = sliceCanvas.toDataURL('image/png');
+          const sliceImgHeight = sliceHeight * ratio;
+
+          pdf.addImage(
+            sliceImg,
+            'PNG',
+            margin,
+            yOffset,
+            imgWidth,
+            sliceImgHeight,
+            undefined,
+            'FAST'
+          );
+        }
+
+        sourceY += sliceHeight;
+        remainingCanvasHeight -= sliceHeight;
+        isFirstConversationPage = false;
       }
-    }
-
-    // Capture chart if exists in DOM
-    const chartElement = document.getElementById(chartElementId);
-    if (chartElement && chartElement.offsetParent !== null) {
-      pdf.addPage();
-      yOffset = margin;
-
-      pdf.setFontSize(14);
-      pdf.text('Visualization', margin, yOffset);
-      yOffset += 10;
-
-      const chartCanvas = await html2canvas(chartElement, {
-        scale: 2,
-        useCORS: true,
-        logging: false,
-        backgroundColor: '#ffffff'
-      });
-
-      const chartImg = chartCanvas.toDataURL('image/png');
-      const chartWidth = contentWidth;
-      const chartHeight = (chartCanvas.height * chartWidth) / chartCanvas.width;
-
-      pdf.addImage(
-        chartImg,
-        'PNG',
-        margin,
-        yOffset,
-        chartWidth,
-        Math.min(chartHeight, pageHeight - yOffset - margin),
-        undefined,
-        'FAST'
-      );
     }
 
     // Save PDF

@@ -37,6 +37,7 @@ export const ConversationTurn = memo(({ userMessage, assistantMessage, isLatest 
       {/* Tab Navigation above user message - Answer label + tabs to control middle area */}
       {/* Only make tabs sticky for the latest turn to avoid overlap */}
       <div
+        className="conversation-tabs"
         style={{
           display: 'flex',
           gap: '8px',
@@ -203,6 +204,7 @@ export const ConversationTurn = memo(({ userMessage, assistantMessage, isLatest 
 
                 {/* Horizontal scrolling chart container */}
                 <div
+                  id="chart-container"
                   style={{
                     display: 'flex',
                     gap: '12px',

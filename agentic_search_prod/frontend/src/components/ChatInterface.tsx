@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { MessageList } from './MessageList';
 import { InputArea } from './InputArea';
 import { HistorySidebar } from './HistorySidebar';
+import { ExportPdfButton } from './ExportPdfButton';
 import { useTheme } from '../contexts/ThemeContext';
 import { useChatContext } from '../contexts/ChatContext';
 import { apiClient } from '../services/api';
@@ -675,6 +676,15 @@ export function ChatInterface() {
               </div>
             </button>
           </div>
+
+          {/* Export PDF Section */}
+          {state.messages.length > 0 && (
+            <ExportPdfButton
+              conversationElementId="main-scroll-container"
+              chartElementId="chart-container"
+              disabled={state.isLoading}
+            />
+          )}
 
           {/* New Conversation Section */}
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '2px' }}>

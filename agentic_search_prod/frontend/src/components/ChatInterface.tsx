@@ -216,6 +216,18 @@ export function ChatInterface() {
     return () => window.removeEventListener('tools-unavailable', handleToolsUnavailable);
   }, []);
 
+  // Save conversation when response completes (so feedback can be submitted)
+  useEffect(() => {
+    const handleSaveConversation = async () => {
+      if (state.messages.length > 0) {
+        await historyService.saveConversation(state.sessionId, state.messages);
+      }
+    };
+
+    window.addEventListener('save-conversation', handleSaveConversation);
+    return () => window.removeEventListener('save-conversation', handleSaveConversation);
+  }, [state.sessionId, state.messages]);
+
   // Debug log for tools state
   useEffect(() => {
 

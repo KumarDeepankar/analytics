@@ -8,3 +8,4 @@ requests
 httpx
 python-multipart
 python-jose[cryptography]
+boto3

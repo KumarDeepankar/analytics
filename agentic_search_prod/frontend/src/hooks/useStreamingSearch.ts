@@ -142,6 +142,9 @@ export function useStreamingSearch() {
         setStreamingMessageId(null);
         parserRef.current?.reset();
 
+        // Trigger conversation save after each response (so feedback can be submitted)
+        window.dispatchEvent(new CustomEvent('save-conversation'));
+
         // Check tools after conversation turn - notify if connection lost
         try {
           await apiClient.refreshTools();

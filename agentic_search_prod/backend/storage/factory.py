@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 # - "dynamodb" : AWS DynamoDB (good for production, serverless)
 # - "s3"       : AWS S3 with JSON files (good for archival, low cost)
 # - "cached"   : SQLite cache + permanent backend (best for Docker/K8s)
-STORAGE_BACKEND = "sqlite"
+STORAGE_BACKEND = "cached"
 
 # SQLite Configuration
 SQLITE_DB_PATH = None  # None = backend/conversations.db, or set absolute path
@@ -27,7 +27,7 @@ SQLITE_DB_PATH = None  # None = backend/conversations.db, or set absolute path
 # AWS Configuration (for DynamoDB, S3, or cached backends)
 AWS_REGION = "us-east-1"
 DYNAMODB_TABLE_NAME = "conversations"
-S3_BUCKET = "your-bucket-name"  # Can include folder: "bucket-name/folder/subfolder"
+S3_BUCKET = "product-raw-i/conversations"  # Can include folder: "bucket-name/folder/subfolder"
 
 # Cached Backend Configuration (when STORAGE_BACKEND = "cached")
 # Permanent backend: "dynamodb" | "s3"

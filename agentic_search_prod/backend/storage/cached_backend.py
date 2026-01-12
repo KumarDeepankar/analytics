@@ -212,13 +212,32 @@ class CachedBackend(ConversationStorageBackend):
         feedback_text: Optional[str] = None
     ) -> bool:
         """Save feedback to both cache and permanent."""
+        # Save to cache first (always works)
+        cache_success = self.cache.save_feedback(
+            message_id, conversation_id, user_email, rating, feedback_text
+        )
+
+        # Try to save to permanent
         permanent_success = self.permanent.save_feedback(
             message_id, conversation_id, user_email, rating, feedback_text
         )
-        self.cache.save_feedback(
-            message_id, conversation_id, user_email, rating, feedback_text
-        )
-        return permanent_success
+
+        # If permanent failed (conversation not synced yet), sync it first then retry
+        if not permanent_success:
+            conv = self.cache.get_conversation(conversation_id, user_email)
+            if conv:
+                logger.info(f"Syncing conversation {conversation_id} to permanent before saving feedback")
+                self.permanent.save_conversation(
+                    conversation_id, user_email,
+                    conv.get("messages", []),
+                    conv.get("title")
+                )
+                # Retry feedback save
+                permanent_success = self.permanent.save_feedback(
+                    message_id, conversation_id, user_email, rating, feedback_text
+                )
+
+        return cache_success  # Return cache success since that's the user-facing storage
 
     def get_feedback(
         self,

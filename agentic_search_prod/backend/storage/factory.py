@@ -27,7 +27,7 @@ SQLITE_DB_PATH = None  # None = backend/conversations.db, or set absolute path
 # AWS Configuration (for DynamoDB, S3, or cached backends)
 AWS_REGION = "us-east-1"
 DYNAMODB_TABLE_NAME = "conversations"
-S3_BUCKET = "your-bucket-name"
+S3_BUCKET = "your-bucket-name"  # Can include folder: "bucket-name/folder/subfolder"
 
 # Cached Backend Configuration (when STORAGE_BACKEND = "cached")
 # Permanent backend: "dynamodb" | "s3"
@@ -118,9 +118,13 @@ class StorageFactory:
                 config["region"] = region
 
         elif backend_type == "s3":
-            bucket = os.getenv("S3_BUCKET", S3_BUCKET)
-            if bucket:
-                config["bucket"] = bucket
+            bucket_path = os.getenv("S3_BUCKET", S3_BUCKET)
+            if bucket_path:
+                # Support "bucket/folder/" format - split into bucket and prefix
+                parts = bucket_path.split("/", 1)
+                config["bucket"] = parts[0]
+                if len(parts) > 1 and parts[1]:
+                    config["prefix"] = parts[1]
             region = os.getenv("AWS_REGION", AWS_REGION)
             if region:
                 config["region"] = region
@@ -140,9 +144,13 @@ class StorageFactory:
                 if region:
                     permanent_config["region"] = region
             elif permanent_type == "s3":
-                bucket = os.getenv("S3_BUCKET", S3_BUCKET)
-                if bucket:
-                    permanent_config["bucket"] = bucket
+                bucket_path = os.getenv("S3_BUCKET", S3_BUCKET)
+                if bucket_path:
+                    # Support "bucket/folder/" format - split into bucket and prefix
+                    parts = bucket_path.split("/", 1)
+                    permanent_config["bucket"] = parts[0]
+                    if len(parts) > 1 and parts[1]:
+                        permanent_config["prefix"] = parts[1]
                 region = os.getenv("AWS_REGION", AWS_REGION)
                 if region:
                     permanent_config["region"] = region

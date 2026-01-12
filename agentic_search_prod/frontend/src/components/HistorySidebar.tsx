@@ -1,7 +1,7 @@
 /**
  * History Sidebar - Shows conversation history
  */
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useTheme } from '../contexts/ThemeContext';
 import { useChatContext } from '../contexts/ChatContext';
 import { historyService, type ConversationSummary } from '../services/historyService';
@@ -18,15 +18,10 @@ export function HistorySidebar({ isOpen, onClose, onLoadConversation }: HistoryS
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const refreshTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
-  // Load conversations when sidebar opens
-  useEffect(() => {
-    if (isOpen) {
-      loadConversations();
-    }
-  }, [isOpen]);
-
-  const loadConversations = async () => {
+  // Memoized load function to avoid stale closures
+  const loadConversations = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
@@ -38,7 +33,36 @@ export function HistorySidebar({ isOpen, onClose, onLoadConversation }: HistoryS
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
+
+  // Debounced refresh to prevent multiple rapid calls
+  const debouncedRefresh = useCallback(() => {
+    if (refreshTimeoutRef.current) {
+      clearTimeout(refreshTimeoutRef.current);
+    }
+    refreshTimeoutRef.current = setTimeout(() => {
+      loadConversations();
+    }, 500);
+  }, [loadConversations]);
+
+  // Load conversations when sidebar opens
+  useEffect(() => {
+    if (isOpen) {
+      loadConversations();
+    }
+  }, [isOpen, loadConversations]);
+
+  // Listen for custom refresh event (triggered by historyService.saveConversation)
+  useEffect(() => {
+    const handleRefresh = () => debouncedRefresh();
+    window.addEventListener('refresh-history', handleRefresh);
+    return () => {
+      window.removeEventListener('refresh-history', handleRefresh);
+      if (refreshTimeoutRef.current) {
+        clearTimeout(refreshTimeoutRef.current);
+      }
+    };
+  }, [debouncedRefresh]);
 
   const handleDelete = async (e: React.MouseEvent, conversationId: string) => {
     e.stopPropagation();

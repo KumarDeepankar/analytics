@@ -272,16 +272,6 @@ export function ChatInterface() {
     }
   };
 
-  // Auto-save conversation when messages change
-  useEffect(() => {
-    if (state.messages.length > 0) {
-      const saveTimer = setTimeout(() => {
-        historyService.saveConversation(state.sessionId, state.messages);
-      }, 2000); // Debounce: save 2 seconds after last message
-      return () => clearTimeout(saveTimer);
-    }
-  }, [state.messages, state.sessionId]);
-
   // Load conversation from history
   const handleLoadConversation = async (conversationId: string) => {
     try {

@@ -193,7 +193,11 @@ function chatReducer(state: ChatState, action: ChatAction): ChatState {
       return {
         ...state,
         sessionId: action.payload.sessionId,
-        messages: action.payload.messages,
+        // Reset isStreaming for all loaded messages (historical messages are never streaming)
+        messages: action.payload.messages.map((msg: Message) => ({
+          ...msg,
+          isStreaming: false,
+        })),
         isLoading: false,
         currentStreamingMessageId: null,
       };

@@ -21,6 +21,9 @@ export interface ConversationDetail {
 }
 
 class HistoryService {
+  // Track pending feedback saves to prevent race conditions
+  private pendingFeedbackSave: Promise<boolean> | null = null;
+
   /**
    * Get list of user's conversations
    */
@@ -64,6 +67,11 @@ class HistoryService {
     messages: Message[],
     title?: string
   ): Promise<boolean> {
+    // Wait for any pending feedback save to complete first (prevents race condition)
+    if (this.pendingFeedbackSave) {
+      await this.pendingFeedbackSave;
+    }
+
     const response = await fetch(getBackendUrl('/conversations'), {
       method: 'POST',
       credentials: 'include',
@@ -77,7 +85,20 @@ class HistoryService {
       }),
     });
 
+    if (response.ok) {
+      // Trigger history refresh after successful save
+      this.triggerHistoryRefresh();
+    }
+
     return response.ok;
+  }
+
+  /**
+   * Trigger a refresh of the history sidebar
+   * Can be called from anywhere to update the conversation list
+   */
+  triggerHistoryRefresh(): void {
+    window.dispatchEvent(new CustomEvent('refresh-history'));
   }
 
   /**
@@ -150,7 +171,8 @@ class HistoryService {
     rating: number,
     feedbackText?: string
   ): Promise<boolean> {
-    const response = await fetch(getBackendUrl('/conversations/feedback'), {
+    // Track this save to prevent race conditions with saveConversation
+    const savePromise = fetch(getBackendUrl('/conversations/feedback'), {
       method: 'POST',
       credentials: 'include',
       headers: {
@@ -162,9 +184,18 @@ class HistoryService {
         rating: rating,
         feedback_text: feedbackText,
       }),
-    });
+    }).then(response => response.ok);
 
-    return response.ok;
+    this.pendingFeedbackSave = savePromise;
+
+    try {
+      return await savePromise;
+    } finally {
+      // Clear the pending save once complete
+      if (this.pendingFeedbackSave === savePromise) {
+        this.pendingFeedbackSave = null;
+      }
+    }
   }
 }
 

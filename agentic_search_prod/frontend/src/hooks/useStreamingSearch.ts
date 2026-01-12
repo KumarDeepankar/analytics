@@ -185,6 +185,24 @@ export function useStreamingSearch() {
     let charactersSinceLastRender = 0;
     const RENDER_THROTTLE_TIME = 50; // Milliseconds between renders (same as chat.html)
     const RENDER_THROTTLE_CHARS = 10; // Characters between renders (same as chat.html)
+    const STREAM_INACTIVITY_TIMEOUT = 120000; // 2 minutes of no data = timeout
+
+    // Inactivity timeout - abort if no data received for too long
+    let inactivityTimer: ReturnType<typeof setTimeout> | null = null;
+    const resetInactivityTimer = () => {
+      if (inactivityTimer) clearTimeout(inactivityTimer);
+      inactivityTimer = setTimeout(() => {
+        if (abortControllerRef.current) {
+          abortControllerRef.current.abort();
+        }
+      }, STREAM_INACTIVITY_TIMEOUT);
+    };
+    const clearInactivityTimer = () => {
+      if (inactivityTimer) {
+        clearTimeout(inactivityTimer);
+        inactivityTimer = null;
+      }
+    };
 
     // Function to update content
     const updateContent = () => {
@@ -199,8 +217,13 @@ export function useStreamingSearch() {
     };
 
     try {
+      // Start inactivity timer
+      resetInactivityTimer();
+
       // Read stream chunks
       for await (const chunk of readStream(response)) {
+        // Reset inactivity timer on each chunk
+        resetInactivityTimer();
         const parsedChunks = parser.parseChunk(chunk);
 
         for (const parsedChunk of parsedChunks) {
@@ -341,8 +364,10 @@ export function useStreamingSearch() {
       // Clear the deduplication buffer for next message
       sourcesBufferRef.current.clear();
     } catch (error) {
-
       throw error;
+    } finally {
+      // Always clear inactivity timer
+      clearInactivityTimer();
     }
   };
 

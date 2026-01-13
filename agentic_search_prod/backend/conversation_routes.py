@@ -2,6 +2,7 @@
 Conversation History API Routes
 RESTful endpoints for managing chat history
 """
+import logging
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
@@ -18,6 +19,8 @@ from conversation_store import (
     get_preferences,
     save_feedback
 )
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/conversations", tags=["conversations"])
 
@@ -94,7 +97,10 @@ async def save_conversation_endpoint(body: SaveConversationRequest, request: Req
     user = require_auth(request)
     user_email = user.get("email")
 
+    logger.info(f"[API] POST /conversations - conv_id={body.conversation_id}, user={user_email}, msg_count={len(body.messages)}")
+
     if not user_email:
+        logger.error(f"[API] User email not found in request")
         raise HTTPException(status_code=400, detail="User email not found")
 
     success = save_conversation(
@@ -105,8 +111,10 @@ async def save_conversation_endpoint(body: SaveConversationRequest, request: Req
     )
 
     if not success:
+        logger.error(f"[API] Failed to save conversation {body.conversation_id}")
         raise HTTPException(status_code=500, detail="Failed to save conversation")
 
+    logger.info(f"[API] Successfully saved conversation {body.conversation_id}")
     return JSONResponse(content={
         "success": True,
         "conversation_id": body.conversation_id
@@ -207,11 +215,15 @@ async def save_feedback_endpoint(body: SaveFeedbackRequest, request: Request):
     user = require_auth(request)
     user_email = user.get("email")
 
+    logger.info(f"[API] POST /conversations/feedback - msg_id={body.message_id}, conv_id={body.conversation_id}, user={user_email}, rating={body.rating}")
+
     if not user_email:
+        logger.error(f"[API] User email not found in feedback request")
         raise HTTPException(status_code=400, detail="User email not found")
 
     # Validate rating
     if not 1 <= body.rating <= 5:
+        logger.error(f"[API] Invalid rating: {body.rating}")
         raise HTTPException(status_code=400, detail="Rating must be between 1 and 5")
 
     success = save_feedback(
@@ -223,8 +235,10 @@ async def save_feedback_endpoint(body: SaveFeedbackRequest, request: Request):
     )
 
     if not success:
+        logger.error(f"[API] Failed to save feedback for message {body.message_id}")
         raise HTTPException(status_code=500, detail="Failed to save feedback")
 
+    logger.info(f"[API] Successfully saved feedback for message {body.message_id}")
     return JSONResponse(content={
         "success": True,
         "message_id": body.message_id,

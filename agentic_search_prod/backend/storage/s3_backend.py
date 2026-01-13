@@ -124,6 +124,7 @@ class S3Backend(ConversationStorageBackend):
         title: Optional[str] = None
     ) -> bool:
         """Save or update a conversation"""
+        logger.info(f"[S3] save_conversation called - conv_id={conversation_id}, user={user_email}, msg_count={len(messages)}")
         try:
             now = datetime.utcnow().isoformat()
 
@@ -170,7 +171,9 @@ class S3Backend(ConversationStorageBackend):
                 "updated_at": now,
                 "messages": messages
             }
+            logger.info(f"[S3] Saving conversation to key: {conv_key}")
             self._put_object(conv_key, conversation_data)
+            logger.info(f"[S3] Conversation file saved successfully")
 
             # Update index
             index[conversation_id] = {
@@ -180,13 +183,21 @@ class S3Backend(ConversationStorageBackend):
                 "created_at": created_at,
                 "updated_at": now
             }
+            logger.info(f"[S3] Updating index for user {user_email}")
             self._save_index(user_email, index)
 
-            logger.info(f"Saved conversation {conversation_id} with {len(messages)} messages")
+            logger.info(f"[S3] SUCCESS - Saved conversation {conversation_id} with {len(messages)} messages")
             return True
 
+        except ClientError as e:
+            error_code = e.response.get('Error', {}).get('Code', 'Unknown')
+            error_msg = e.response.get('Error', {}).get('Message', str(e))
+            logger.error(f"[S3] AWS ClientError saving conversation {conversation_id}: code={error_code}, msg={error_msg}")
+            return False
         except Exception as e:
-            logger.error(f"Error saving conversation: {e}")
+            logger.error(f"[S3] FAILED to save conversation {conversation_id}: {type(e).__name__}: {e}")
+            import traceback
+            logger.error(f"[S3] Traceback: {traceback.format_exc()}")
             return False
 
     def get_conversations(
@@ -351,22 +362,29 @@ class S3Backend(ConversationStorageBackend):
         feedback_text: Optional[str] = None
     ) -> bool:
         """Save feedback for a message (assistant response)"""
+        logger.info(f"[S3] save_feedback called - msg_id={message_id}, conv_id={conversation_id}, user={user_email}, rating={rating}")
+
         # Validate rating
         if not 1 <= rating <= 5:
-            logger.error(f"Invalid rating: {rating}. Must be 1-5.")
+            logger.error(f"[S3] Invalid rating: {rating}. Must be 1-5.")
             return False
 
         try:
             # Get conversation
             conv_key = self._get_key(user_email, "conversations", f"{conversation_id}.json")
+            logger.info(f"[S3] Fetching conversation from key: {conv_key}")
             data = self._get_object(conv_key)
             if not data:
-                logger.error(f"Conversation {conversation_id} not found for user {user_email}")
+                logger.error(f"[S3] Conversation {conversation_id} NOT FOUND in S3 for user {user_email}")
                 return False
+
+            logger.info(f"[S3] Found conversation with {len(data.get('messages', []))} messages")
 
             # Find and update message
             message_found = False
+            msg_ids_in_conv = []
             for msg in data.get("messages", []):
+                msg_ids_in_conv.append(msg.get("id"))
                 if msg.get("id") == message_id:
                     msg["feedback_rating"] = rating
                     msg["feedback_text"] = feedback_text
@@ -374,17 +392,25 @@ class S3Backend(ConversationStorageBackend):
                     break
 
             if not message_found:
-                logger.error(f"Message {message_id} not found in conversation {conversation_id}")
+                logger.error(f"[S3] Message {message_id} NOT FOUND in conversation. Available msg_ids: {msg_ids_in_conv}")
                 return False
 
             # Save updated conversation
+            logger.info(f"[S3] Saving updated conversation with feedback")
             self._put_object(conv_key, data)
 
-            logger.info(f"Saved feedback for message {message_id}: {rating} stars")
+            logger.info(f"[S3] SUCCESS - Saved feedback for message {message_id}: {rating} stars")
             return True
 
+        except ClientError as e:
+            error_code = e.response.get('Error', {}).get('Code', 'Unknown')
+            error_msg = e.response.get('Error', {}).get('Message', str(e))
+            logger.error(f"[S3] AWS ClientError saving feedback: code={error_code}, msg={error_msg}")
+            return False
         except Exception as e:
-            logger.error(f"Error saving feedback: {e}")
+            logger.error(f"[S3] FAILED to save feedback: {type(e).__name__}: {e}")
+            import traceback
+            logger.error(f"[S3] Traceback: {traceback.format_exc()}")
             return False
 
     def get_feedback(

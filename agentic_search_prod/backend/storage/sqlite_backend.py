@@ -163,12 +163,17 @@ class SQLiteBackend(ConversationStorageBackend):
                         if k not in excluded_fields
                     }
 
-                    # Restore feedback if it existed
+                    # Restore feedback: prioritize existing DB feedback, then incoming message data
                     feedback_rating = None
                     feedback_text = None
                     if msg_id and msg_id in existing_feedback:
+                        # Use existing feedback from database
                         feedback_rating = existing_feedback[msg_id]["rating"]
                         feedback_text = existing_feedback[msg_id]["text"]
+                    else:
+                        # Fall back to feedback from incoming message (e.g., synced from S3)
+                        feedback_rating = msg.get("feedbackRating") or msg.get("feedback_rating")
+                        feedback_text = msg.get("feedbackText") or msg.get("feedback_text")
 
                     cursor.execute("""
                         INSERT INTO messages (id, conversation_id, type, content, timestamp, metadata, feedback_rating, feedback_text)

@@ -108,18 +108,24 @@ class CachedBackend(ConversationStorageBackend):
         title: Optional[str] = None
     ) -> bool:
         """Save to both cache and permanent storage."""
+        logger.info(f"[CACHED] save_conversation called - conv_id={conversation_id}, user={user_email}, msg_count={len(messages)}")
+
         # Save to permanent first (source of truth)
+        logger.info(f"[CACHED] Saving to PERMANENT storage...")
         permanent_success = self.permanent.save_conversation(
             conversation_id, user_email, messages, title
         )
+        logger.info(f"[CACHED] Permanent storage result: {'SUCCESS' if permanent_success else 'FAILED'}")
 
         # Save to cache
+        logger.info(f"[CACHED] Saving to CACHE storage...")
         cache_success = self.cache.save_conversation(
             conversation_id, user_email, messages, title
         )
+        logger.info(f"[CACHED] Cache storage result: {'SUCCESS' if cache_success else 'FAILED'}")
 
         if not permanent_success:
-            logger.error(f"Failed to save conversation {conversation_id} to permanent storage")
+            logger.error(f"[CACHED] FAILED to save conversation {conversation_id} to permanent storage")
 
         return permanent_success  # Return permanent status as it's the source of truth
 
@@ -212,30 +218,43 @@ class CachedBackend(ConversationStorageBackend):
         feedback_text: Optional[str] = None
     ) -> bool:
         """Save feedback to both cache and permanent."""
+        logger.info(f"[CACHED] save_feedback called - msg_id={message_id}, conv_id={conversation_id}, user={user_email}, rating={rating}")
+
         # Save to cache first (always works)
+        logger.info(f"[CACHED] Saving feedback to CACHE...")
         cache_success = self.cache.save_feedback(
             message_id, conversation_id, user_email, rating, feedback_text
         )
+        logger.info(f"[CACHED] Cache feedback result: {'SUCCESS' if cache_success else 'FAILED'}")
 
         # Try to save to permanent
+        logger.info(f"[CACHED] Saving feedback to PERMANENT...")
         permanent_success = self.permanent.save_feedback(
             message_id, conversation_id, user_email, rating, feedback_text
         )
+        logger.info(f"[CACHED] Permanent feedback result: {'SUCCESS' if permanent_success else 'FAILED'}")
 
         # If permanent failed (conversation not synced yet), sync it first then retry
         if not permanent_success:
+            logger.info(f"[CACHED] Permanent failed, attempting to sync conversation first...")
             conv = self.cache.get_conversation(conversation_id, user_email)
             if conv:
-                logger.info(f"Syncing conversation {conversation_id} to permanent before saving feedback")
-                self.permanent.save_conversation(
+                logger.info(f"[CACHED] Found conversation in cache with {len(conv.get('messages', []))} messages, syncing to permanent...")
+                sync_success = self.permanent.save_conversation(
                     conversation_id, user_email,
                     conv.get("messages", []),
                     conv.get("title")
                 )
+                logger.info(f"[CACHED] Sync result: {'SUCCESS' if sync_success else 'FAILED'}")
+
                 # Retry feedback save
+                logger.info(f"[CACHED] Retrying feedback save to permanent...")
                 permanent_success = self.permanent.save_feedback(
                     message_id, conversation_id, user_email, rating, feedback_text
                 )
+                logger.info(f"[CACHED] Retry result: {'SUCCESS' if permanent_success else 'FAILED'}")
+            else:
+                logger.error(f"[CACHED] Conversation {conversation_id} NOT FOUND in cache either!")
 
         return cache_success  # Return cache success since that's the user-facing storage
 

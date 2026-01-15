@@ -1,34 +1,25 @@
 #!/usr/bin/env python3
 """
-Analytical MCP Server - Pure Analytics with Fuzzy Matching
+Analytical MCP Server (Conclusion Date) - Pure Analytics with Fuzzy Matching
 
 A FastMCP server that provides:
-- Keyword, integer, and date field filtering with fuzzy matching
+- Keyword and date field filtering with fuzzy matching
 - Full-text search fallback when keyword filters don't match
 - Strong guardrails for consistent results
 - Rich contextual responses with full metadata
+
+This server uses event_conclusion_date as the primary date field.
 """
 import os
 import json
 import logging
-import ssl
 from typing import Optional, List, Dict, Any
-import aiohttp
-from fastmcp import FastMCP
 from fastmcp.tools.tool import ToolResult
 from rapidfuzz import fuzz
 
-from index_metadata import IndexMetadata
-from input_validator import InputValidator
 from text_search import text_search_with_filters
 from query_classifier import classify_search_text
 from document_merge import get_merged_documents_batch
-
-# Import conclusion date tool
-from server_conclusion import (
-    analyze_events_by_conclusion,
-    CONCLUSION_TOOL_DOCSTRING,
-)
 
 # Configure logging
 logging.basicConfig(
@@ -40,12 +31,6 @@ logger = logging.getLogger(__name__)
 # ============================================================================
 # CONFIGURATION
 # ============================================================================
-
-# OpenSearch configuration
-OPENSEARCH_URL = os.getenv("OPENSEARCH_URL", "http://localhost:9200")
-OPENSEARCH_USERNAME = os.getenv("OPENSEARCH_USERNAME", "admin")
-OPENSEARCH_PASSWORD = os.getenv("OPENSEARCH_PASSWORD", "admin")
-INDEX_NAME = os.getenv("INDEX_NAME", "events_analytics_v4")
 
 # Field configuration
 
@@ -69,17 +54,22 @@ WORD_SEARCH_FIELDS = os.getenv(
     "event_title"
 ).split(",")
 
-NUMERIC_FIELDS = os.getenv("NUMERIC_FIELDS", "year,event_count").split(",")
+# Use event_conclusion_date as the date field for this server
+DATE_FIELDS = os.getenv("DATE_FIELDS_CONCLUSION", "event_conclusion_date").split(",")
 
-DATE_FIELDS = os.getenv("DATE_FIELDS", "event_date").split(",")
+# Derived fields - extracted from date fields at query time (no physical field in index)
+# Maps derived field name -> source date field
+DERIVED_YEAR_FIELDS = {
+    "year": "event_conclusion_date"  # year extracted from event_conclusion_date
+}
 
-# All filterable fields
-ALL_FILTER_FIELDS = KEYWORD_FIELDS + NUMERIC_FIELDS + DATE_FIELDS
+# All filterable fields (includes derived fields)
+ALL_FILTER_FIELDS = KEYWORD_FIELDS + DATE_FIELDS + list(DERIVED_YEAR_FIELDS.keys())
 
-# Result fields to return
+# Result fields to return (includes event_conclusion_date)
 RESULT_FIELDS = os.getenv(
-    "RESULT_FIELDS",
-    "rid,docid,event_title,event_theme,country,year,event_date,url"
+    "RESULT_FIELDS_CONCLUSION",
+    "rid,docid,event_title,event_theme,country,event_conclusion_date,url"
 ).split(",")
 
 # Valid date histogram intervals
@@ -87,9 +77,6 @@ VALID_DATE_INTERVALS = ["year", "quarter", "month", "week", "day"]
 
 # Document return configuration
 MAX_DOCUMENTS = 10
-
-# Field context configuration for tool description
-FIELD_CONTEXT_MAX_SAMPLES = int(os.getenv("FIELD_CONTEXT_MAX_SAMPLES", "5"))  # Max sample values per keyword field
 
 # Samples per bucket configuration - sample docs returned inside each aggregation bucket
 SAMPLES_PER_BUCKET_DEFAULT = int(os.getenv("SAMPLES_PER_BUCKET_DEFAULT", "0"))  # 0 = disabled
@@ -102,9 +89,8 @@ DEFAULT_FIELD_DESCRIPTIONS = {
     "country": "Geographic location where the event took place",
     "event_title": "Name/title of the event",
     "event_theme": "Topic or category of the event",
-    "event_date": "Date when the event occurred",
-    "year": "Year of the event",
-    "event_count": "Number of occurrences or attendees",
+    "event_conclusion_date": "Date when the event concluded/ended",
+    "year": "Year extracted from event_conclusion_date (derived field)",
     "rid": "Unique record identifier",
     "docid": "Document identifier",
     "url": "Source URL of the event"
@@ -125,150 +111,80 @@ else:
 # DYNAMIC DOCSTRING
 # ============================================================================
 
-ANALYTICS_DOCSTRING = f"""Events analytics tool. Query with filters and/or aggregations.
+ANALYTICS_DOCSTRING = f"""Analyze events by conclusion date.
 
 <fields>
 keyword: {', '.join(KEYWORD_FIELDS)}
-numeric: {', '.join(NUMERIC_FIELDS)}
-date: {', '.join(DATE_FIELDS)}
+date: event_conclusion_date
+year: integer (derived from event_conclusion_date)
 </fields>
 
 <parameters>
-filters: JSON string - exact match '{{"country": "India", "year": 2023}}' (PREFERRED - use when field is known)
-range_filters: JSON string - range '{{"year": {{"gte": 2020, "lte": 2024}}}}'
-fallback_search: str - LAST RESORT when field unknown. Auto-classifies to filters or text search. COMBINE with filters, group_by, or date_histogram for targeted results.
-group_by: str - single "country" or nested "country,year"
-date_histogram: JSON string - '{{"field": "event_date", "interval": "year|quarter|month|week|day"}}'
-numeric_histogram: JSON string - '{{"field": "event_count", "interval": 100}}'
-stats_fields: str - "event_count" returns min/max/avg/sum/count/std_dev
-top_n: int - max buckets (default 20)
-top_n_per_group: int - nested buckets (default 5)
-samples_per_bucket: int - sample docs per aggregation bucket (default from SAMPLES_PER_BUCKET_DEFAULT env var, 0=disabled)
+filters: '{{"year": 2023}}' or '{{"country": "India"}}'
+range_filters: '{{"year": {{"gte": 2020, "lte": 2024}}}}'
+fallback_search: "tech summit" (text search when field is unknown - use as LAST RESORT)
+group_by: "country" or "year" or "country,year"
+date_histogram: '{{"field": "event_conclusion_date", "interval": "year|quarter|month|week|day"}}'
+top_n: max buckets (default 20)
+top_n_per_group: max nested buckets for multi-level group_by (default 5)
+samples_per_bucket: sample docs per bucket (default 0)
 </parameters>
 
-<date_formats>
-"2023" → full year (gte: Jan 1, lt: Jan 1 next year)
-"Q1 2023" or "2023-Q1" or "2023Q1" → quarter (gte: Jan 1, lt: Apr 1)
-"2023-06" → month (gte: Jun 1, lt: Jul 1)
-"2023-06-15" → exact date (no expansion)
-Note: Uses "lt" (less than) with next period start to correctly include all timestamps within the period.
-</date_formats>
-
 <examples>
-Top countries: group_by="country", top_n=10
-Country by theme: group_by="country,event_theme", top_n=5, top_n_per_group=3
-Monthly trend: date_histogram='{{"field": "event_date", "interval": "month"}}'
-Yearly trend: date_histogram='{{"field": "event_date", "interval": "year"}}'
-Quarterly trend: date_histogram='{{"field": "event_date", "interval": "quarter"}}'
-Weekly trend: date_histogram='{{"field": "event_date", "interval": "week"}}'
-Daily trend: date_histogram='{{"field": "event_date", "interval": "day"}}'
-Year distribution: numeric_histogram='{{"field": "year", "interval": 1}}'
-Event stats: stats_fields="event_count"
-Filter + group: filters='{{"country": "India"}}', group_by="event_theme"
-Filter by year: filters='{{"year": 2023}}', group_by="country"
-Range + group: range_filters='{{"year": {{"gte": 2022}}}}', group_by="country"
-Samples per bucket: group_by="country", samples_per_bucket=3
+# === AGGREGATION ONLY ===
+group_by="country"
+group_by="year"
+group_by="country,year", top_n=5, top_n_per_group=3
+date_histogram='{{"field": "event_conclusion_date", "interval": "month"}}'
+group_by="country", date_histogram='{{"field": "event_conclusion_date", "interval": "year"}}'
 
-# Date filter examples (all formats):
-Filter by full year: filters='{{"event_date": "2023"}}', group_by="country"
-Filter by quarter (Q1 2023): filters='{{"event_date": "Q1 2023"}}', group_by="event_theme"
-Filter by quarter (2023-Q1): filters='{{"event_date": "2023-Q1"}}', group_by="event_theme"
-Filter by quarter (2023Q1): filters='{{"event_date": "2023Q1"}}', group_by="event_theme"
-Filter by month: filters='{{"event_date": "2023-06"}}', group_by="country"
-Filter by exact date: filters='{{"event_date": "2023-06-15"}}', group_by="country"
+# === FILTER ONLY (returns documents) ===
+filters='{{"country": "India"}}'
+filters='{{"year": 2023}}'
+filters='{{"event_conclusion_date": "Q1 2023"}}'
 
-# Date range_filters examples:
-Date range (exact dates): range_filters='{{"event_date": {{"gte": "2023-01-01", "lt": "2024-01-01"}}}}', group_by="country"
-Date range (year boundaries): range_filters='{{"event_date": {{"gte": "2022", "lt": "2024"}}}}', group_by="country"
-Date range (quarter start): range_filters='{{"event_date": {{"gte": "Q2 2023"}}}}', group_by="event_theme"
-Date range (month boundaries): range_filters='{{"event_date": {{"gte": "2023-06", "lt": "2023-10"}}}}', group_by="country"
-Date range (open-ended from): range_filters='{{"event_date": {{"gte": "2023-01-01"}}}}', group_by="country"
-Date range (open-ended to): range_filters='{{"event_date": {{"lt": "2023-07-01"}}}}', group_by="country"
-Date range + trend: range_filters='{{"event_date": {{"gte": "2022", "lt": "2024"}}}}', date_histogram='{{"field": "event_date", "interval": "month"}}'
+# === FILTER + GROUP BY ===
+filters='{{"country": "India"}}', group_by="event_theme"
+filters='{{"year": 2023}}', group_by="country"
+filters='{{"country": "India", "year": 2023}}', group_by="event_theme"
 
-# fallback_search examples (LAST RESORT - prefer filters when field is known):
-Fallback + aggregation: fallback_search="singing events", group_by="country"
-Fallback + filter + aggregation: fallback_search="winter conference", filters='{{"year": 2024}}', group_by="event_theme"
-Fallback + date trend: fallback_search="tech summit", date_histogram='{{"field": "event_date", "interval": "month"}}'
+# === FILTER + DATE HISTOGRAM ===
+filters='{{"year": 2023}}', date_histogram='{{"field": "event_conclusion_date", "interval": "month"}}'
+filters='{{"country": "India"}}', date_histogram='{{"field": "event_conclusion_date", "interval": "quarter"}}'
+
+# === RANGE FILTER + AGGREGATION ===
+range_filters='{{"year": {{"gte": 2020, "lte": 2024}}}}', group_by="country"
+range_filters='{{"year": {{"gte": 2020}}}}', date_histogram='{{"field": "event_conclusion_date", "interval": "year"}}'
+
+# === FILTER + RANGE FILTER + AGGREGATION ===
+filters='{{"country": "India"}}', range_filters='{{"year": {{"gte": 2020, "lte": 2024}}}}', group_by="event_theme"
+filters='{{"country": "India"}}', range_filters='{{"year": {{"gte": 2020}}}}', date_histogram='{{"field": "event_conclusion_date", "interval": "month"}}'
+
+# === WITH SAMPLES ===
+group_by="country", samples_per_bucket=3
+filters='{{"year": 2023}}', group_by="country", samples_per_bucket=2
+
+# === FALLBACK SEARCH (last resort - only when field is unknown) ===
+fallback_search="tech summit", group_by="country"
+fallback_search="annual conference", filters='{{"year": 2023}}'
 </examples>
+
+<rules>
+1. ALWAYS use filters + group_by/date_histogram when fields are known
+2. fallback_search is LAST RESORT - only when user query cannot be mapped to a field
+3. Provide at least one: filters OR group_by OR date_histogram OR fallback_search
+</rules>
 
 <response>
 status: "success" | "empty_query" | "no_results"
 mode: "filter_only" | "aggregation" | "search"
-filters_used: {{field: value}} - resolved filter values
-exact_match: bool - true if all filters matched exactly
-data_context: {{total_documents_in_index, documents_matched, match_percentage}}
-aggregations: {{group_by, date_histogram, numeric_histogram, stats}} - based on query type
-documents: [...] - matching documents (always included)
-document_count: int - number of documents returned
-chart_config: [...] - visualization config for aggregations
-warnings: [...] - fuzzy match warnings if any
+aggregations: group_by buckets, date_histogram
+documents: matching documents
 </response>
-
-<rules>
-- ALWAYS prefer filters over fallback_search when you know which field to query
-- fallback_search is ONLY for vague user queries where the target field is unclear
-- When using fallback_search, ALWAYS combine with group_by or date_histogram for better results
-- Provide at least one: filters OR fallback_search OR aggregation (group_by/date_histogram/stats_fields)
-- Use keyword fields for filters and group_by
-- Use numeric fields for stats_fields and numeric_histogram
-- Use date fields for date_histogram
-- samples_per_bucket: returns sample docs inside each bucket with samples_returned, other_docs_in_bucket counts (only with group_by)
-</rules>
 """
 
-# ============================================================================
-# INITIALIZE SERVER
-# ============================================================================
-
-mcp = FastMCP("Analytical Events Server")
-
-# Global instances
-metadata = IndexMetadata()
-validator: Optional[InputValidator] = None
 
 
-# ============================================================================
-# OPENSEARCH CLIENT
-# ============================================================================
-
-async def opensearch_request(method: str, path: str, body: Optional[dict] = None) -> dict:
-    """Make async HTTP request to OpenSearch with basic authentication."""
-    url = f"{OPENSEARCH_URL}/{path}"
-    auth = aiohttp.BasicAuth(OPENSEARCH_USERNAME, OPENSEARCH_PASSWORD)
-
-    # SSL context for HTTPS
-    ssl_context = None
-    if OPENSEARCH_URL.startswith("https://"):
-        ssl_context = ssl.create_default_context()
-        ssl_context.check_hostname = False
-        ssl_context.verify_mode = ssl.CERT_NONE
-
-    try:
-        connector = aiohttp.TCPConnector(ssl=ssl_context if ssl_context else False)
-        timeout = aiohttp.ClientTimeout(total=30)
-
-        async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
-            if method == "GET":
-                async with session.get(url, auth=auth) as response:
-                    if response.status == 200:
-                        return await response.json()
-                    else:
-                        error_text = await response.text()
-                        raise Exception(f"OpenSearch error ({response.status}): {error_text}")
-
-            elif method == "POST":
-                headers = {"Content-Type": "application/json"}
-                async with session.post(url, json=body, headers=headers, auth=auth) as response:
-                    if response.status in [200, 201]:
-                        return await response.json()
-                    else:
-                        error_text = await response.text()
-                        raise Exception(f"OpenSearch error ({response.status}): {error_text}")
-
-    except aiohttp.ClientError as e:
-        logger.error(f"HTTP request failed: {e}")
-        raise Exception(f"Failed to connect to OpenSearch at {OPENSEARCH_URL}: {str(e)}")
 
 
 # ============================================================================
@@ -298,6 +214,10 @@ async def resolve_keyword_filter(
             "confidence": 100 for exact, <100 for fuzzy
         }
     """
+    import shared_state
+    opensearch_request = shared_state.opensearch_request
+    INDEX_NAME = shared_state.INDEX_NAME
+
     # Step 1: Check exact match exists
     exact_query = {
         "size": 0,
@@ -410,29 +330,34 @@ async def resolve_keyword_filter(
 # MAIN ANALYTICS TOOL
 # ============================================================================
 
-async def analyze_events(
+async def analyze_events_by_conclusion(
     filters: Optional[str] = None,
     range_filters: Optional[str] = None,
     fallback_search: Optional[str] = None,
     group_by: Optional[str] = None,
     date_histogram: Optional[str] = None,
-    numeric_histogram: Optional[str] = None,
-    stats_fields: Optional[str] = None,
     top_n: int = 20,
     top_n_per_group: int = 5,
     samples_per_bucket: int = SAMPLES_PER_BUCKET_DEFAULT
 ) -> ToolResult:
     """
-    Analyze events with filtering, grouping, and statistics.
+    Analyze events by conclusion date with filtering, grouping, and statistics.
     All inputs are validated and normalized with fuzzy matching.
     Requires at least one: filter OR aggregation (group_by/date_histogram/stats_fields).
     """
-    global validator
+    # Import from shared_state to avoid circular import issues
+    import shared_state
 
-    if validator is None:
+    if shared_state.validator is None:
         return ToolResult(content=[], structured_content={
             "error": "Server not initialized. Please wait and retry."
         })
+
+    # Local references for cleaner code
+    validator = shared_state.validator
+    metadata = shared_state.metadata
+    opensearch_request = shared_state.opensearch_request
+    INDEX_NAME = shared_state.INDEX_NAME
 
     warnings: List[str] = []
     match_metadata: Dict[str, Any] = {}  # Track match types for transparency
@@ -521,35 +446,6 @@ async def analyze_events(
                 "error": f"Invalid date_histogram JSON: {e}"
             })
 
-    # Parse numeric_histogram
-    parsed_numeric_histogram = None
-    if numeric_histogram:
-        try:
-            parsed_numeric_histogram = json.loads(numeric_histogram)
-            if "field" not in parsed_numeric_histogram:
-                return ToolResult(content=[], structured_content={
-                    "error": "numeric_histogram requires 'field' parameter"
-                })
-            if parsed_numeric_histogram["field"] not in NUMERIC_FIELDS:
-                return ToolResult(content=[], structured_content={
-                    "error": f"Invalid numeric_histogram field. Valid: {', '.join(NUMERIC_FIELDS)}"
-                })
-            # Must have either interval or ranges
-            if "interval" not in parsed_numeric_histogram and "ranges" not in parsed_numeric_histogram:
-                parsed_numeric_histogram["interval"] = 10  # Default interval
-        except json.JSONDecodeError as e:
-            return ToolResult(content=[], structured_content={
-                "error": f"Invalid numeric_histogram JSON: {e}"
-            })
-
-    parsed_stats_fields = []
-    if stats_fields:
-        parsed_stats_fields = [f.strip() for f in stats_fields.split(",") if f.strip()]
-        for sf in parsed_stats_fields:
-            if sf not in NUMERIC_FIELDS:
-                return ToolResult(content=[], structured_content={
-                    "error": f"Invalid stats field '{sf}'. Valid: {', '.join(NUMERIC_FIELDS)}"
-                })
 
     # ===== VALIDATE AND NORMALIZE FILTERS =====
 
@@ -609,16 +505,6 @@ async def analyze_events(
 
             filter_clauses.append(resolve_result["filter_clause"])
 
-        elif field in NUMERIC_FIELDS:
-            result = validator.validate_integer(field, value)
-            if not result.valid:
-                return ToolResult(content=[], structured_content={
-                    "error": result.warnings[0] if result.warnings else f"Invalid integer: {value}",
-                    "suggestions": result.suggestions
-                })
-            warnings.extend(result.warnings)
-            filter_clauses.append({"term": {field: result.normalized_value}})
-
         elif field in DATE_FIELDS:
             result = validator.validate_date(field, str(value))
             if not result.valid:
@@ -638,6 +524,27 @@ async def analyze_events(
             else:
                 filter_clauses.append({"term": {field: result.normalized_value}})
 
+        elif field in DERIVED_YEAR_FIELDS:
+            # Derived year field - convert to date range on source date field
+            source_date_field = DERIVED_YEAR_FIELDS[field]
+            try:
+                year_val = int(value)
+                # Convert year to date range: year 2023 -> gte: 2023-01-01, lt: 2024-01-01
+                date_range = {
+                    "gte": f"{year_val}-01-01",
+                    "lt": f"{year_val + 1}-01-01"
+                }
+                filter_clauses.append({"range": {source_date_field: date_range}})
+                query_context["filters_normalized"][field] = {
+                    "original": value,
+                    "derived_from": source_date_field,
+                    "expanded_to": date_range
+                }
+            except (ValueError, TypeError):
+                return ToolResult(content=[], structured_content={
+                    "error": f"Invalid year value '{value}'. Expected integer (e.g., 2023)"
+                })
+
         query_context["filters_applied"][field] = value
 
     # Add unclassified terms from fallback_search to search_terms
@@ -648,8 +555,9 @@ async def analyze_events(
     # ===== VALIDATE AND NORMALIZE RANGE FILTERS =====
 
     for field, range_spec in parsed_range_filters.items():
-        # Validate field name
-        field_result = validator.validate_field_name(field, NUMERIC_FIELDS + DATE_FIELDS)
+        # Validate field name (includes derived year fields)
+        valid_range_fields = DATE_FIELDS + list(DERIVED_YEAR_FIELDS.keys())
+        field_result = validator.validate_field_name(field, valid_range_fields)
         if not field_result.valid:
             return ToolResult(content=[], structured_content={
                 "error": f"Range filter not supported for '{field}'",
@@ -657,28 +565,53 @@ async def analyze_events(
             })
         field = field_result.normalized_value
 
-        if field in NUMERIC_FIELDS:
-            result = validator.validate_integer_range(field, range_spec)
+        if field in DERIVED_YEAR_FIELDS:
+            # Derived year field - convert year range to date range
+            source_date_field = DERIVED_YEAR_FIELDS[field]
+            date_range = {}
+            try:
+                if "gte" in range_spec:
+                    year_val = int(range_spec["gte"])
+                    date_range["gte"] = f"{year_val}-01-01"
+                if "gt" in range_spec:
+                    year_val = int(range_spec["gt"])
+                    date_range["gte"] = f"{year_val + 1}-01-01"  # gt 2022 means >= 2023
+                if "lte" in range_spec:
+                    year_val = int(range_spec["lte"])
+                    date_range["lt"] = f"{year_val + 1}-01-01"  # lte 2023 means < 2024
+                if "lt" in range_spec:
+                    year_val = int(range_spec["lt"])
+                    date_range["lt"] = f"{year_val}-01-01"
+            except (ValueError, TypeError) as e:
+                return ToolResult(content=[], structured_content={
+                    "error": f"Invalid year range value. Expected integers (e.g., {{'gte': 2020, 'lte': 2024}})"
+                })
+            filter_clauses.append({"range": {source_date_field: date_range}})
+            query_context["range_filters_applied"][field] = {
+                "original": range_spec,
+                "derived_from": source_date_field,
+                "expanded_to": date_range
+            }
         else:
             result = validator.validate_date_range(field, range_spec)
-
-        if not result.valid:
-            return ToolResult(content=[], structured_content={
-                "error": result.warnings[0] if result.warnings else "Invalid range filter",
-                "suggestions": result.suggestions
-            })
-
-        warnings.extend(result.warnings)
-        filter_clauses.append({"range": {field: result.normalized_value}})
-        query_context["range_filters_applied"][field] = result.normalized_value
+            if not result.valid:
+                return ToolResult(content=[], structured_content={
+                    "error": result.warnings[0] if result.warnings else "Invalid range filter",
+                    "suggestions": result.suggestions
+                })
+            warnings.extend(result.warnings)
+            filter_clauses.append({"range": {field: result.normalized_value}})
+            query_context["range_filters_applied"][field] = result.normalized_value
 
     # ===== VALIDATE GROUP BY (supports multi-level: "country,year") =====
 
     group_by_fields = []
     if group_by:
         raw_fields = [f.strip() for f in group_by.split(",") if f.strip()]
+        # Allow grouping by keyword and derived year fields
+        valid_group_by_fields = KEYWORD_FIELDS + list(DERIVED_YEAR_FIELDS.keys())
         for gf in raw_fields:
-            field_result = validator.validate_field_name(gf, KEYWORD_FIELDS + NUMERIC_FIELDS)
+            field_result = validator.validate_field_name(gf, valid_group_by_fields)
             if not field_result.valid:
                 return ToolResult(content=[], structured_content={
                     "error": f"Cannot group by '{gf}'",
@@ -696,38 +629,27 @@ async def analyze_events(
             f"date_histogram:{parsed_date_histogram['field']}:{parsed_date_histogram['interval']}"
         )
 
-    if parsed_numeric_histogram:
-        interval_info = parsed_numeric_histogram.get("interval", "ranges")
-        query_context["aggregations"].append(
-            f"numeric_histogram:{parsed_numeric_histogram['field']}:{interval_info}"
-        )
-
-    if parsed_stats_fields:
-        query_context["aggregations"].append(f"stats:{','.join(parsed_stats_fields)}")
-
     # ===== REQUIRE AT LEAST ONE: FILTER OR AGGREGATION =====
 
     has_filters = bool(filter_clauses) or bool(search_terms)  # Include search_terms as they came from filters
-    has_aggregation = bool(group_by_fields or parsed_date_histogram or parsed_numeric_histogram or parsed_stats_fields)
+    has_aggregation = bool(group_by_fields or parsed_date_histogram)
 
     if not has_filters and not has_aggregation:
         return ToolResult(content=[], structured_content={
             "status": "empty_query",
             "error": "Query is empty - specify filter or aggregation",
-            "message": "Provide at least one: filters OR fallback_search OR (group_by / date_histogram / stats_fields)",
+            "message": "Provide at least one: filters OR fallback_search OR group_by OR date_histogram",
             "examples": {
                 "filter_only": {"filters": "{\"country\": \"India\"}"},
                 "group_by_country": {"group_by": "country"},
                 "group_by_theme": {"group_by": "event_theme"},
-                "monthly_trend": {"date_histogram": "{\"field\": \"event_date\", \"interval\": \"month\"}"},
-                "stats": {"stats_fields": "event_count"},
+                "monthly_trend": {"date_histogram": "{\"field\": \"event_conclusion_date\", \"interval\": \"month\"}"},
                 "filter_and_group": {"filters": "{\"country\": \"India\"}", "group_by": "event_theme"},
                 "fallback_search_with_group": {"fallback_search": "tech summit", "group_by": "country"}
             },
             "available_fields": {
                 "filters": ALL_FILTER_FIELDS,
-                "group_by": KEYWORD_FIELDS + NUMERIC_FIELDS,
-                "stats_fields": NUMERIC_FIELDS,
+                "group_by": KEYWORD_FIELDS + list(DERIVED_YEAR_FIELDS.keys()),
                 "date_histogram": DATE_FIELDS
             }
         })
@@ -839,13 +761,30 @@ async def analyze_events(
             field = fields[0]
             size = top_n if depth == 0 else top_n_per_group
 
-            agg: Dict[str, Any] = {
-                "terms": {"field": field, "size": size},
-                "aggs": {
-                    # Count unique IDs in each bucket for accurate counts
-                    "unique_ids": {"cardinality": {"field": UNIQUE_ID_FIELD, "precision_threshold": 40000}}
+            # Check if this is a derived year field
+            if field in DERIVED_YEAR_FIELDS:
+                source_date_field = DERIVED_YEAR_FIELDS[field]
+                # Use script-based aggregation to extract year from date field
+                agg: Dict[str, Any] = {
+                    "terms": {
+                        "script": {
+                            "source": f"doc['{source_date_field}'].value.year",
+                            "lang": "painless"
+                        },
+                        "size": size
+                    },
+                    "aggs": {
+                        "unique_ids": {"cardinality": {"field": UNIQUE_ID_FIELD, "precision_threshold": 40000}}
+                    }
                 }
-            }
+            else:
+                agg: Dict[str, Any] = {
+                    "terms": {"field": field, "size": size},
+                    "aggs": {
+                        # Count unique IDs in each bucket for accurate counts
+                        "unique_ids": {"cardinality": {"field": UNIQUE_ID_FIELD, "precision_threshold": 40000}}
+                    }
+                }
 
             # Add samples at the deepest level if samples_per_bucket > 0
             # Use terms on unique ID field with top_hits to deduplicate samples
@@ -902,42 +841,6 @@ async def analyze_events(
             }
         }
 
-    # Add numeric histogram
-    if parsed_numeric_histogram:
-        field = parsed_numeric_histogram["field"]
-
-        if "ranges" in parsed_numeric_histogram:
-            # Custom ranges: [{"to": 10}, {"from": 10, "to": 50}, {"from": 50}]
-            search_body["aggs"]["numeric_histogram_agg"] = {
-                "range": {
-                    "field": field,
-                    "ranges": parsed_numeric_histogram["ranges"]
-                },
-                "aggs": {
-                    # Count unique IDs per range bucket
-                    "unique_ids": {"cardinality": {"field": UNIQUE_ID_FIELD, "precision_threshold": 40000}}
-                }
-            }
-        else:
-            # Fixed interval histogram
-            interval = parsed_numeric_histogram.get("interval", 10)
-            search_body["aggs"]["numeric_histogram_agg"] = {
-                "histogram": {
-                    "field": field,
-                    "interval": interval,
-                    "min_doc_count": 0
-                },
-                "aggs": {
-                    # Count unique IDs per histogram bucket
-                    "unique_ids": {"cardinality": {"field": UNIQUE_ID_FIELD, "precision_threshold": 40000}}
-                }
-            }
-
-    # Add stats aggregations
-    for stats_field in parsed_stats_fields:
-        search_body["aggs"][f"{stats_field}_stats"] = {
-            "extended_stats": {"field": stats_field}
-        }
 
     # ===== EXECUTE SEARCH =====
 
@@ -1105,60 +1008,9 @@ async def analyze_events(
         except Exception:
             pass  # Silently skip note if calculation fails
 
-    # Numeric histogram results
-    if parsed_numeric_histogram and "numeric_histogram_agg" in aggs:
-        buckets = aggs["numeric_histogram_agg"].get("buckets", [])
-        field = parsed_numeric_histogram["field"]
-        is_range = "ranges" in parsed_numeric_histogram
-
-        hist_buckets = []
-        for b in buckets:
-            if is_range:
-                # Range aggregation format
-                label = b.get("key", f"{b.get('from', '*')}-{b.get('to', '*')}")
-            else:
-                # Histogram format - bucket key is the lower bound
-                label = f"{b['key']}-{b['key'] + parsed_numeric_histogram.get('interval', 10)}"
-
-            # Use unique_ids count instead of doc_count
-            unique_count = b.get("unique_ids", {}).get("value", b["doc_count"])
-
-            hist_buckets.append({
-                "range": label,
-                "from": b.get("from") if is_range else b.get("key"),
-                "to": b.get("to") if is_range else (b.get("key", 0) + parsed_numeric_histogram.get("interval", 10)),
-                "count": unique_count,  # Unique ID count
-                "doc_count": b["doc_count"],  # Raw doc count for reference
-                "percentage": round(
-                    unique_count / total_matched * 100
-                    if total_matched > 0 else 0,
-                    1
-                )
-            })
-
-        aggregations["numeric_histogram"] = {
-            "field": field,
-            "interval": parsed_numeric_histogram.get("interval"),
-            "custom_ranges": is_range,
-            "buckets": hist_buckets
-        }
-
-    # Stats results
-    if parsed_stats_fields:
-        aggregations["stats"] = {}
-        for stats_field in parsed_stats_fields:
-            stats_data = aggs.get(f"{stats_field}_stats", {})
-            aggregations["stats"][stats_field] = {
-                "min": stats_data.get("min"),
-                "max": stats_data.get("max"),
-                "avg": round(stats_data.get("avg", 0), 2) if stats_data.get("avg") else None,
-                "sum": stats_data.get("sum"),
-                "count": stats_data.get("count"),
-                "std_dev": round(stats_data.get("std_deviation", 0), 2) if stats_data.get("std_deviation") else None
-            }
 
     # Generate chart config
-    chart_config = _generate_chart_config(aggregations, group_by_fields, parsed_date_histogram, parsed_numeric_histogram)
+    chart_config = _generate_chart_config(aggregations, group_by_fields, parsed_date_histogram)
 
     # Build filter_resolution - clear summary of what was actually searched
     filter_resolution = {}
@@ -1211,8 +1063,7 @@ async def analyze_events(
 def _generate_chart_config(
     aggregations: Dict[str, Any],
     group_by_fields: Optional[List[str]],
-    date_histogram: Optional[dict],
-    numeric_histogram: Optional[dict] = None
+    date_histogram: Optional[dict]
 ) -> List[dict]:
     """Generate chart configuration from aggregation results."""
     charts = []
@@ -1245,7 +1096,7 @@ def _generate_chart_config(
             interval = hist_data.get("interval", "month")
             charts.append({
                 "type": "line",
-                "title": f"Events Over Time (by {interval})",
+                "title": f"Events Over Time by Conclusion Date (by {interval})",
                 "labels": [str(b["date"]) for b in buckets],
                 "data": [b["count"] for b in buckets],
                 "aggregation_field": "date_histogram",
@@ -1253,165 +1104,8 @@ def _generate_chart_config(
                 "total_records": sum(b["count"] for b in buckets)
             })
 
-    # Numeric histogram chart
-    if numeric_histogram and "numeric_histogram" in aggregations:
-        hist_data = aggregations["numeric_histogram"]
-        buckets = hist_data.get("buckets", [])
-        if buckets:
-            field = hist_data.get("field", "value")
-            charts.append({
-                "type": "bar",
-                "title": f"Distribution of {field.replace('_', ' ').title()}",
-                "labels": [str(b["range"]) for b in buckets],
-                "data": [b["count"] for b in buckets],
-                "aggregation_field": "numeric_histogram",
-                "field": field,
-                "total_records": sum(b["count"] for b in buckets)
-            })
-
     return charts
 
 
-# ============================================================================
-# REGISTER TOOLS
-# ============================================================================
-
-#mcp.tool(description=ANALYTICS_DOCSTRING)(analyze_events)
-mcp.tool(description=CONCLUSION_TOOL_DOCSTRING)(analyze_events_by_conclusion)
-
-
-# ============================================================================
-# DYNAMIC FIELD CONTEXT
-# ============================================================================
-
-def build_dynamic_field_context() -> str:
-    """
-    Build field context from loaded metadata.
-    Returns a formatted string with field descriptions, valid values, and ranges.
-    """
-    lines = []
-
-    # Keyword fields with descriptions and sample values
-    lines.append("Keyword Fields:")
-    for field in KEYWORD_FIELDS:
-        desc = FIELD_DESCRIPTIONS.get(field, "")
-        count = len(metadata.get_keyword_values(field))
-        top_vals = metadata.get_keyword_top_values(field, FIELD_CONTEXT_MAX_SAMPLES)
-        samples = [str(v["value"]) for v in top_vals]
-        if desc:
-            lines.append(f"  {field}: {desc}")
-            lines.append(f"    - {count} unique values, e.g., {samples}")
-        else:
-            lines.append(f"  {field}: {count} unique values, e.g., {samples}")
-
-    # Numeric fields with descriptions and ranges
-    lines.append("\nNumeric Fields:")
-    for field in NUMERIC_FIELDS:
-        desc = FIELD_DESCRIPTIONS.get(field, "")
-        range_info = metadata.get_numeric_range(field)
-        if range_info and range_info.min is not None:
-            range_str = f"range [{int(range_info.min)}, {int(range_info.max)}]"
-        else:
-            range_str = "numeric field"
-        if desc:
-            lines.append(f"  {field}: {desc}")
-            lines.append(f"    - {range_str}")
-        else:
-            lines.append(f"  {field}: {range_str}")
-
-    # Date fields with descriptions and ranges
-    lines.append("\nDate Fields:")
-    for field in DATE_FIELDS:
-        desc = FIELD_DESCRIPTIONS.get(field, "")
-        range_info = metadata.get_date_range(field)
-        if range_info and range_info.min:
-            range_str = f"range [{range_info.min}, {range_info.max}]"
-        else:
-            range_str = "date field"
-        if desc:
-            lines.append(f"  {field}: {desc}")
-            lines.append(f"    - {range_str}")
-        else:
-            lines.append(f"  {field}: {range_str}")
-
-    # Unique ID field info
-    lines.append(f"\nUnique ID field: {UNIQUE_ID_FIELD}")
-    lines.append(f"Total unique IDs in index: {metadata.total_unique_ids}")
-
-    return '\n'.join(lines)
-
-
-def update_tool_descriptions():
-    """Update all tool descriptions with dynamic field context."""
-    field_context = build_dynamic_field_context()
-
-    # Tool name -> base docstring mapping
-    tool_docstrings = {
-        "analyze_events": ANALYTICS_DOCSTRING,
-        "analyze_events_by_conclusion": CONCLUSION_TOOL_DOCSTRING,
-    }
-
-    for tool in mcp._tool_manager._tools.values():
-        if tool.name in tool_docstrings:
-            enhanced = tool_docstrings[tool.name].replace(
-                '</fields>',
-                f'</fields>\n\n<field_context>\n{field_context}\n</field_context>'
-            )
-            tool.description = enhanced
-            logger.info(f"Updated {tool.name} tool description with field context")
-
-
-# ============================================================================
-# STARTUP
-# ============================================================================
-
-async def startup():
-    """Initialize server: load index metadata and update tool descriptions."""
-    global validator
-
-    import shared_state
-    logger.info("Initializing Analytical MCP Server...")
-    logger.info(f"  OpenSearch: {OPENSEARCH_URL}")
-    logger.info(f"  Index: {INDEX_NAME}")
-
-    # Load metadata
-    await metadata.load(
-        opensearch_request,
-        INDEX_NAME,
-        KEYWORD_FIELDS,
-        NUMERIC_FIELDS,
-        DATE_FIELDS,
-        UNIQUE_ID_FIELD
-    )
-
-    # Initialize validator
-    validator = InputValidator(metadata)
-
-    # Store in shared_state for server_conclusion.py to access
-    shared_state.validator = validator
-    shared_state.metadata = metadata
-    shared_state.opensearch_request = opensearch_request
-    shared_state.INDEX_NAME = INDEX_NAME
-
-    # Update all tool descriptions with dynamic field context
-    update_tool_descriptions()
-
-    logger.info("Server initialized successfully")
-
-
-# ============================================================================
-# MAIN
-# ============================================================================
-
-if __name__ == "__main__":
-    import asyncio
-
-    host = os.getenv("HOST", "127.0.0.1")
-    port = int(os.getenv("PORT", "8003"))
-
-    # Initialize metadata
-    asyncio.run(startup())
-
-    # Run server
-    logger.info(f"Starting Analytical MCP Server on http://{host}:{port}")
-    mcp.run(transport="sse", host=host, port=port)
+# Export tool function and docstring for registration by main server
+CONCLUSION_TOOL_DOCSTRING = ANALYTICS_DOCSTRING

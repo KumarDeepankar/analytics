@@ -32,6 +32,9 @@ logger = logging.getLogger(__name__)
 # CONFIGURATION
 # ============================================================================
 
+# Index configuration (separate from main server.py index)
+INDEX_NAME = os.getenv("INDEX_NAME_CONCLUSION", os.getenv("INDEX_NAME", "events_analytics_v4"))
+
 # Field configuration
 
 # Unique identifier field for deduplication (treats multiple docs with same ID as one record)
@@ -82,7 +85,7 @@ MAX_DOCUMENTS = 10
 SAMPLES_PER_BUCKET_DEFAULT = int(os.getenv("SAMPLES_PER_BUCKET_DEFAULT", "0"))  # 0 = disabled
 
 # Verbose data context - include index-wide stats in response
-VERBOSE_DATA_CONTEXT = os.getenv("VERBOSE_DATA_CONTEXT", "false").lower() == "true"
+VERBOSE_DATA_CONTEXT = os.getenv("VERBOSE_DATA_CONTEXT", "true").lower() == "true"
 
 # Field descriptions for agent context (can be overridden via FIELD_DESCRIPTIONS env var as JSON)
 DEFAULT_FIELD_DESCRIPTIONS = {
@@ -111,7 +114,7 @@ else:
 # DYNAMIC DOCSTRING
 # ============================================================================
 
-ANALYTICS_DOCSTRING = f"""Analyze events by conclusion date.
+ANALYTICS_DOCSTRING = f"""Events analytics tool (by conclusion date). Query with filters and/or aggregations.
 
 <fields>
 keyword: {', '.join(KEYWORD_FIELDS)}
@@ -120,53 +123,53 @@ year: integer (derived from event_conclusion_date)
 </fields>
 
 <parameters>
-filters: '{{"year": 2023}}' or '{{"country": "India"}}'
-range_filters: '{{"year": {{"gte": 2020, "lte": 2024}}}}'
-fallback_search: "tech summit" (text search when field is unknown - use as LAST RESORT)
-group_by: "country" or "year" or "country,year"
-date_histogram: '{{"field": "event_conclusion_date", "interval": "year|quarter|month|week|day"}}'
-top_n: max buckets (default 20)
-top_n_per_group: max nested buckets for multi-level group_by (default 5)
-samples_per_bucket: sample docs per bucket (default 0)
+filters: JSON string - exact match '{{"country": "India", "year": 2023}}' (PREFERRED - use when field is known)
+range_filters: JSON string - range '{{"year": {{"gte": 2020, "lte": 2024}}}}'
+fallback_search: str - LAST RESORT when field unknown. Auto-classifies to filters or text search.
+group_by: str - single "country" or nested "country,year"
+date_histogram: JSON string - '{{"field": "event_conclusion_date", "interval": "year|quarter|month|week|day"}}'
+top_n: int - max buckets (default 20)
+top_n_per_group: int - nested buckets (default 5)
+samples_per_bucket: int - sample docs per bucket (default 0)
 </parameters>
 
+<date_formats>
+"2023" → full year (gte: Jan 1, lt: Jan 1 next year)
+"Q1 2023" or "2023-Q1" or "2023Q1" → quarter (gte: Jan 1, lt: Apr 1)
+"2023-06" → month (gte: Jun 1, lt: Jul 1)
+"2023-06-15" → exact date (no expansion)
+Note: Uses "lt" (less than) with next period start to correctly include all timestamps within the period.
+</date_formats>
+
 <examples>
-# === AGGREGATION ONLY ===
-group_by="country"
-group_by="year"
-group_by="country,year", top_n=5, top_n_per_group=3
-date_histogram='{{"field": "event_conclusion_date", "interval": "month"}}'
-group_by="country", date_histogram='{{"field": "event_conclusion_date", "interval": "year"}}'
+Top countries: group_by="country", top_n=10
+Country by theme: group_by="country,event_theme", top_n=5, top_n_per_group=3
+Yearly trend: date_histogram='{{"field": "event_conclusion_date", "interval": "year"}}'
+Quarterly trend: date_histogram='{{"field": "event_conclusion_date", "interval": "quarter"}}'
+Monthly trend: date_histogram='{{"field": "event_conclusion_date", "interval": "month"}}'
+Weekly trend: date_histogram='{{"field": "event_conclusion_date", "interval": "week"}}'
+Daily trend: date_histogram='{{"field": "event_conclusion_date", "interval": "day"}}'
 
-# === FILTER ONLY (returns documents) ===
-filters='{{"country": "India"}}'
-filters='{{"year": 2023}}'
-filters='{{"event_conclusion_date": "Q1 2023"}}'
+Filter by country: filters='{{"country": "India"}}'
+Filter by year: filters='{{"year": 2023}}'
+Filter + group: filters='{{"country": "India"}}', group_by="event_theme"
+Filter by year + group: filters='{{"year": 2023}}', group_by="country"
+Multi-filter + group: filters='{{"country": "India", "year": 2023}}', group_by="event_theme"
 
-# === FILTER + GROUP BY ===
-filters='{{"country": "India"}}', group_by="event_theme"
-filters='{{"year": 2023}}', group_by="country"
-filters='{{"country": "India", "year": 2023}}', group_by="event_theme"
+Range + group: range_filters='{{"year": {{"gte": 2020, "lte": 2024}}}}', group_by="country"
+Range + trend: range_filters='{{"year": {{"gte": 2020}}}}', date_histogram='{{"field": "event_conclusion_date", "interval": "year"}}'
 
-# === FILTER + DATE HISTOGRAM ===
-filters='{{"year": 2023}}', date_histogram='{{"field": "event_conclusion_date", "interval": "month"}}'
-filters='{{"country": "India"}}', date_histogram='{{"field": "event_conclusion_date", "interval": "quarter"}}'
+Filter by full year: filters='{{"event_conclusion_date": "2023"}}', group_by="country"
+Filter by quarter (Q1 2023): filters='{{"event_conclusion_date": "Q1 2023"}}', group_by="event_theme"
+Filter by quarter (2023-Q1): filters='{{"event_conclusion_date": "2023-Q1"}}', group_by="event_theme"
+Filter by month: filters='{{"event_conclusion_date": "2023-06"}}', group_by="country"
+Filter by exact date: filters='{{"event_conclusion_date": "2023-06-15"}}', group_by="country"
 
-# === RANGE FILTER + AGGREGATION ===
-range_filters='{{"year": {{"gte": 2020, "lte": 2024}}}}', group_by="country"
-range_filters='{{"year": {{"gte": 2020}}}}', date_histogram='{{"field": "event_conclusion_date", "interval": "year"}}'
+Samples per bucket: group_by="country", samples_per_bucket=3
+Filter + samples: filters='{{"year": 2023}}', group_by="country", samples_per_bucket=2
 
-# === FILTER + RANGE FILTER + AGGREGATION ===
-filters='{{"country": "India"}}', range_filters='{{"year": {{"gte": 2020, "lte": 2024}}}}', group_by="event_theme"
-filters='{{"country": "India"}}', range_filters='{{"year": {{"gte": 2020}}}}', date_histogram='{{"field": "event_conclusion_date", "interval": "month"}}'
-
-# === WITH SAMPLES ===
-group_by="country", samples_per_bucket=3
-filters='{{"year": 2023}}', group_by="country", samples_per_bucket=2
-
-# === FALLBACK SEARCH (last resort - only when field is unknown) ===
-fallback_search="tech summit", group_by="country"
-fallback_search="annual conference", filters='{{"year": 2023}}'
+Fallback search + group: fallback_search="tech summit", group_by="country"
+Fallback search + filter: fallback_search="annual conference", filters='{{"year": 2023}}'
 </examples>
 
 <rules>
@@ -216,7 +219,7 @@ async def resolve_keyword_filter(
     """
     import shared_state
     opensearch_request = shared_state.opensearch_request
-    INDEX_NAME = shared_state.INDEX_NAME
+    # Use module's INDEX_NAME (not shared_state)
 
     # Step 1: Check exact match exists
     exact_query = {
@@ -341,23 +344,23 @@ async def analyze_events_by_conclusion(
     samples_per_bucket: int = SAMPLES_PER_BUCKET_DEFAULT
 ) -> ToolResult:
     """
-    Analyze events by conclusion date with filtering, grouping, and statistics.
+    Analyze events by conclusion date with filtering, grouping, and aggregations.
     All inputs are validated and normalized with fuzzy matching.
-    Requires at least one: filter OR aggregation (group_by/date_histogram/stats_fields).
+    Requires at least one: filter OR aggregation (group_by/date_histogram).
     """
     # Import from shared_state to avoid circular import issues
     import shared_state
 
-    if shared_state.validator is None:
+    if shared_state.validator_conclusion is None:
         return ToolResult(content=[], structured_content={
             "error": "Server not initialized. Please wait and retry."
         })
 
-    # Local references for cleaner code
-    validator = shared_state.validator
-    metadata = shared_state.metadata
+    # Local references for cleaner code (use conclusion-specific instances)
+    validator = shared_state.validator_conclusion
+    metadata = shared_state.metadata_conclusion
     opensearch_request = shared_state.opensearch_request
-    INDEX_NAME = shared_state.INDEX_NAME
+    # Use module's INDEX_NAME (defined at top of file)
 
     warnings: List[str] = []
     match_metadata: Dict[str, Any] = {}  # Track match types for transparency
@@ -841,6 +844,24 @@ async def analyze_events_by_conclusion(
             }
         }
 
+    # Auto-add aggregations for filter-only mode to get accurate chart data
+    auto_agg_fields = []
+    if filter_only_mode:
+        # Select fields for auto-aggregation (exclude fields already filtered on)
+        filtered_fields = set(parsed_filters.keys())
+        MAX_AUTO_AGGS = 2  # Generate aggregations for up to 2 fields
+
+        for field in KEYWORD_FIELDS:
+            if field not in filtered_fields and field not in ["rid", "docid", "url"]:  # Skip ID/URL fields
+                auto_agg_fields.append(field)
+                search_body["aggs"][f"auto_agg_{field}"] = {
+                    "terms": {"field": field, "size": 10},
+                    "aggs": {
+                        "unique_ids": {"cardinality": {"field": UNIQUE_ID_FIELD, "precision_threshold": 40000}}
+                    }
+                }
+                if len(auto_agg_fields) >= MAX_AUTO_AGGS:
+                    break
 
     # ===== EXECUTE SEARCH =====
 
@@ -860,7 +881,7 @@ async def analyze_events_by_conclusion(
     total_unique_ids = aggs.get("unique_ids", {}).get("value", 0)
     total_matched = total_unique_ids if total_unique_ids > 0 else total_hits
 
-    # Data context - minimal by default, verbose if VERBOSE_DATA_CONTEXT=true
+    # Data context - verbose by default (VERBOSE_DATA_CONTEXT=true)
     data_context = {
         "unique_ids_matched": total_matched
     }
@@ -1009,8 +1030,34 @@ async def analyze_events_by_conclusion(
             pass  # Silently skip note if calculation fails
 
 
+    # Extract auto-aggregation results for filter-only mode
+    auto_aggregations = {}
+    if filter_only_mode and auto_agg_fields:
+        for field in auto_agg_fields:
+            agg_key = f"auto_agg_{field}"
+            if agg_key in aggs:
+                buckets = aggs[agg_key].get("buckets", [])
+                if buckets:
+                    auto_aggregations[field] = {
+                        "field": field,
+                        "buckets": [
+                            {
+                                "key": b["key"],
+                                "count": b.get("unique_ids", {}).get("value", b["doc_count"]),
+                                "doc_count": b["doc_count"]
+                            }
+                            for b in buckets
+                        ]
+                    }
+
     # Generate chart config
-    chart_config = _generate_chart_config(aggregations, group_by_fields, parsed_date_histogram)
+    # Pass auto_aggregations for filter-only mode to get accurate server-side counts
+    chart_config = _generate_chart_config(
+        aggregations,
+        group_by_fields,
+        parsed_date_histogram,
+        auto_aggregations=auto_aggregations if filter_only_mode else None
+    )
 
     # Build filter_resolution - clear summary of what was actually searched
     filter_resolution = {}
@@ -1044,9 +1091,9 @@ async def analyze_events_by_conclusion(
         "exact_match": all_exact,
         "query_context": query_context,
         "data_context": data_context,
-        "aggregations": aggregations if not filter_only_mode else {},
+        "aggregations": aggregations if not filter_only_mode else auto_aggregations,  # Include auto-aggregations for filter-only
         "warnings": warnings,
-        "chart_config": chart_config if not filter_only_mode else []
+        "chart_config": chart_config  # Always include chart_config
     }
 
     # Add documents to response
@@ -1063,9 +1110,14 @@ async def analyze_events_by_conclusion(
 def _generate_chart_config(
     aggregations: Dict[str, Any],
     group_by_fields: Optional[List[str]],
-    date_histogram: Optional[dict]
+    date_histogram: Optional[dict],
+    auto_aggregations: Optional[Dict[str, Any]] = None
 ) -> List[dict]:
-    """Generate chart configuration from aggregation results."""
+    """
+    Generate chart configuration from aggregation results.
+
+    For filter-only mode, uses auto_aggregations (server-side aggregations) for accurate counts.
+    """
     charts = []
 
     # Group by chart (top level only for multi-level)
@@ -1104,7 +1156,129 @@ def _generate_chart_config(
                 "total_records": sum(b["count"] for b in buckets)
             })
 
+    # Filter-only mode: generate charts from auto-aggregations (server-side, accurate counts)
+    if not charts and auto_aggregations:
+        for field, agg_data in auto_aggregations.items():
+            buckets = agg_data.get("buckets", [])
+            if buckets:
+                charts.append({
+                    "type": "bar",
+                    "title": f"Distribution by {field.replace('_', ' ').title()}",
+                    "labels": [str(b["key"]) for b in buckets],
+                    "data": [b["count"] for b in buckets],
+                    "aggregation_field": field,
+                    "source": "auto_aggregation",  # Server-side aggregation
+                    "total_records": sum(b["count"] for b in buckets)
+                })
+
     return charts
+
+
+# ============================================================================
+# FIELD CONTEXT BUILDER (Self-contained for this module)
+# ============================================================================
+
+def build_dynamic_field_context() -> str:
+    """
+    Build field context from loaded metadata for this tool.
+    Returns a formatted string with field descriptions, valid values, and ranges.
+
+    This is self-contained - uses only this module's field configurations.
+    """
+    import shared_state
+
+    if shared_state.metadata_conclusion is None:
+        return "Field context not available - server not initialized"
+
+    metadata = shared_state.metadata_conclusion
+    max_samples = shared_state.FIELD_CONTEXT_MAX_SAMPLES
+
+    lines = []
+
+    # Keyword fields with descriptions and sample values
+    lines.append("Keyword Fields:")
+    for field in KEYWORD_FIELDS:
+        desc = FIELD_DESCRIPTIONS.get(field, "")
+        count = len(metadata.get_keyword_values(field))
+        top_vals = metadata.get_keyword_top_values(field, max_samples)
+        samples = [str(v["value"]) for v in top_vals]
+        if desc:
+            lines.append(f"  {field}: {desc}")
+            lines.append(f"    - {count} unique values, e.g., {samples}")
+        else:
+            lines.append(f"  {field}: {count} unique values, e.g., {samples}")
+
+    # Derived fields (year derived from event_conclusion_date)
+    if DERIVED_YEAR_FIELDS:
+        lines.append("\nDerived Fields:")
+        for field, source_field in DERIVED_YEAR_FIELDS.items():
+            desc = FIELD_DESCRIPTIONS.get(field, f"Extracted from {source_field}")
+            # Get date range from source field to show year range
+            range_info = metadata.get_date_range(source_field)
+            if range_info and range_info.min:
+                try:
+                    min_year = range_info.min[:4]
+                    max_year = range_info.max[:4]
+                    range_str = f"range [{min_year}, {max_year}]"
+                except:
+                    range_str = "integer"
+            else:
+                range_str = "integer"
+            lines.append(f"  {field}: {desc}")
+            lines.append(f"    - {range_str} (derived from {source_field})")
+
+    # Date fields with descriptions and ranges
+    lines.append("\nDate Fields:")
+    for field in DATE_FIELDS:
+        desc = FIELD_DESCRIPTIONS.get(field, "")
+        range_info = metadata.get_date_range(field)
+        if range_info and range_info.min:
+            range_str = f"range [{range_info.min}, {range_info.max}]"
+        else:
+            range_str = "date field"
+        if desc:
+            lines.append(f"  {field}: {desc}")
+            lines.append(f"    - {range_str}")
+        else:
+            lines.append(f"  {field}: {range_str}")
+
+    # Unique ID field info
+    lines.append(f"\nUnique ID field: {UNIQUE_ID_FIELD}")
+    lines.append(f"Total unique IDs in index: {metadata.total_unique_ids}")
+
+    return '\n'.join(lines)
+
+
+def get_enhanced_docstring() -> str:
+    """
+    Get the tool docstring with dynamic field context injected.
+    Call this after server startup when metadata is loaded.
+    """
+    field_context = build_dynamic_field_context()
+    return ANALYTICS_DOCSTRING.replace(
+        '</fields>',
+        f'</fields>\n\n<field_context>\n{field_context}\n</field_context>'
+    )
+
+
+def update_tool_description():
+    """
+    Update this tool's description with dynamic field context.
+    Call this after server startup when metadata is loaded.
+    """
+    import shared_state
+
+    if shared_state.mcp is None:
+        logger.warning("MCP not initialized - cannot update tool description")
+        return
+
+    enhanced = get_enhanced_docstring()
+
+    tool_name = analyze_events_by_conclusion.__name__
+    tool = shared_state.mcp._tool_manager._tools.get(tool_name)
+    if tool:
+        tool.description = enhanced
+        logger.info(f"Updated {tool_name} tool description with field context")
 
 
 # Export tool function and docstring for registration by main server

@@ -24,10 +24,15 @@ from text_search import text_search_with_filters
 from query_classifier import classify_search_text
 from document_merge import get_merged_documents_batch
 
-# Import conclusion date tool
+# Import conclusion date tool (only function, docstring, and field configs for metadata loading)
 from server_conclusion import (
     analyze_events_by_conclusion,
     CONCLUSION_TOOL_DOCSTRING,
+    update_tool_description as update_conclusion_tool_description,
+    INDEX_NAME as CONCLUSION_INDEX_NAME,
+    KEYWORD_FIELDS as CONCLUSION_KEYWORD_FIELDS,
+    DATE_FIELDS as CONCLUSION_DATE_FIELDS,
+    UNIQUE_ID_FIELD as CONCLUSION_UNIQUE_ID_FIELD,
 )
 
 # Configure logging
@@ -1286,8 +1291,10 @@ mcp.tool(description=CONCLUSION_TOOL_DOCSTRING)(analyze_events_by_conclusion)
 
 def build_dynamic_field_context() -> str:
     """
-    Build field context from loaded metadata.
+    Build field context from loaded metadata for this tool (analyze_events).
     Returns a formatted string with field descriptions, valid values, and ranges.
+
+    This is self-contained - uses only this module's field configurations.
     """
     lines = []
 
@@ -1342,23 +1349,24 @@ def build_dynamic_field_context() -> str:
 
 
 def update_tool_descriptions():
-    """Update all tool descriptions with dynamic field context."""
+    """
+    Update all tool descriptions with dynamic field context.
+    Each tool module handles its own field context generation.
+    """
+    # Update analyze_events (this module's tool)
     field_context = build_dynamic_field_context()
-
-    # Tool name -> base docstring mapping
-    tool_docstrings = {
-        "analyze_events": ANALYTICS_DOCSTRING,
-        "analyze_events_by_conclusion": CONCLUSION_TOOL_DOCSTRING,
-    }
-
     for tool in mcp._tool_manager._tools.values():
-        if tool.name in tool_docstrings:
-            enhanced = tool_docstrings[tool.name].replace(
+        if tool.name == "analyze_events":
+            enhanced = ANALYTICS_DOCSTRING.replace(
                 '</fields>',
                 f'</fields>\n\n<field_context>\n{field_context}\n</field_context>'
             )
             tool.description = enhanced
-            logger.info(f"Updated {tool.name} tool description with field context")
+            logger.info("Updated analyze_events tool description with field context")
+            break
+
+    # Update analyze_events_by_conclusion (server_conclusion module handles its own)
+    update_conclusion_tool_description()
 
 
 # ============================================================================
@@ -1366,15 +1374,16 @@ def update_tool_descriptions():
 # ============================================================================
 
 async def startup():
-    """Initialize server: load index metadata and update tool descriptions."""
+    """Initialize server: load index metadata for both tools and update tool descriptions."""
     global validator
 
     import shared_state
     logger.info("Initializing Analytical MCP Server...")
     logger.info(f"  OpenSearch: {OPENSEARCH_URL}")
-    logger.info(f"  Index: {INDEX_NAME}")
+    logger.info(f"  Index (analyze_events): {INDEX_NAME}")
+    logger.info(f"  Index (analyze_events_by_conclusion): {CONCLUSION_INDEX_NAME}")
 
-    # Load metadata
+    # ===== LOAD METADATA FOR analyze_events (server.py) =====
     await metadata.load(
         opensearch_request,
         INDEX_NAME,
@@ -1383,20 +1392,41 @@ async def startup():
         DATE_FIELDS,
         UNIQUE_ID_FIELD
     )
-
-    # Initialize validator
     validator = InputValidator(metadata)
 
-    # Store in shared_state for server_conclusion.py to access
+    # Store in shared_state for server.py tool
     shared_state.validator = validator
     shared_state.metadata = metadata
-    shared_state.opensearch_request = opensearch_request
     shared_state.INDEX_NAME = INDEX_NAME
+
+    # ===== LOAD METADATA FOR analyze_events_by_conclusion (server_conclusion.py) =====
+    # Create separate metadata instance for conclusion tool
+    metadata_conclusion = IndexMetadata()
+    await metadata_conclusion.load(
+        opensearch_request,
+        CONCLUSION_INDEX_NAME,
+        CONCLUSION_KEYWORD_FIELDS,
+        [],  # No numeric fields for conclusion tool (uses derived year)
+        CONCLUSION_DATE_FIELDS,
+        CONCLUSION_UNIQUE_ID_FIELD
+    )
+    validator_conclusion = InputValidator(metadata_conclusion)
+
+    # Store in shared_state for server_conclusion.py tool
+    shared_state.validator_conclusion = validator_conclusion
+    shared_state.metadata_conclusion = metadata_conclusion
+    shared_state.INDEX_NAME_CONCLUSION = CONCLUSION_INDEX_NAME
+
+    # ===== SHARED INFRASTRUCTURE =====
+    shared_state.opensearch_request = opensearch_request
+    shared_state.mcp = mcp  # MCP instance for tool description updates
 
     # Update all tool descriptions with dynamic field context
     update_tool_descriptions()
 
     logger.info("Server initialized successfully")
+    logger.info(f"  analyze_events: {metadata.total_unique_ids} unique IDs in {INDEX_NAME}")
+    logger.info(f"  analyze_events_by_conclusion: {metadata_conclusion.total_unique_ids} unique IDs in {CONCLUSION_INDEX_NAME}")
 
 
 # ============================================================================

@@ -117,7 +117,7 @@ async def oauth_login(request: Request, provider_id: str):
     """Initiate OAuth login flow"""
     # Build redirect URI
     base_url = str(request.base_url).rstrip('/')
-    redirect_uri = f"{base_url}/auth/callback"
+    redirect_uri = f"{base_url}/auth/callback/"
 
     auth_data = oauth_provider_manager.create_authorization_url(provider_id, redirect_uri)
 
@@ -181,9 +181,15 @@ async def oauth_callback(request: Request, code: str, state: str):
             details={"provider": provider_id}
         )
 
-        # Redirect to portal with token
-        redirect_url = f"/?token={access_token}"
-        logger.info(f"Redirecting to: {redirect_url[:50]}...")
+        # Check for cross-origin redirect (from agentic_search etc.)
+        redirect_to = pending_redirects.pop(state, None)
+        if redirect_to:
+            redirect_url = f"{redirect_to}?token={access_token}"
+            logger.info(f"Cross-origin redirect to: {redirect_to[:50]}...")
+        else:
+            redirect_url = f"/?token={access_token}"
+            logger.info(f"Redirecting to: {redirect_url[:50]}...")
+
         return RedirectResponse(url=redirect_url)
 
     except HTTPException:
@@ -290,9 +296,9 @@ async def login_redirect(request: Request, provider_id: str, redirect_to: str):
         logger.warning(f"Attempted redirect to unauthorized origin: {redirect_origin}. Allowed: {allowed_origins}")
         raise HTTPException(status_code=403, detail="Invalid redirect URL - not in allowed origins")
 
-    # Build redirect URI for OAuth callback
+    # Build redirect URI for OAuth callback (reuse /auth/callback)
     base_url = str(request.base_url).rstrip('/')
-    callback_uri = f"{base_url}/auth/callback-redirect"
+    callback_uri = f"{base_url}/auth/callback/"
 
     # Create authorization URL
     auth_data = oauth_provider_manager.create_authorization_url(provider_id, callback_uri)

@@ -351,9 +351,9 @@ class OAuthProviderManager:
                             email = await self._get_github_email(session, access_token)
 
                         user_info = UserInfo(
-                            sub=user_data.get("id") or user_data.get("sub") or user_data.get("oid"),
+                            sub=user_data.get("id") or user_data.get("sub") or user_data.get("oid") or user_data.get("GUID") or user_data.get("NTID"),
                             email=email,
-                            name=user_data.get("name") or user_data.get("displayName") or user_data.get("login"),
+                            name=user_data.get("name") or user_data.get("displayName") or user_data.get("given_name") or user_data.get("login") or email,
                             picture=user_data.get("picture") or user_data.get("avatar_url"),
                             provider=provider_id,
                             raw_data=user_data

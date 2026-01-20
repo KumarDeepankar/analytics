@@ -30,6 +30,11 @@ SESSION_COOKIE_MAX_AGE = int(os.getenv("SESSION_COOKIE_MAX_AGE", "28800"))  # 8 
 # In-memory session store (use Redis in production)
 user_sessions: Dict[str, Dict[str, Any]] = {}
 
+# Track emails pending forced logout (for SSE push notifications)
+# When session is invalidated via webhook, email is added here
+# SSE subscribers check this to push immediate logout to frontend
+pending_logouts: set = set()
+
 
 def _jwks_to_public_key(jwk: Dict[str, Any]) -> Optional[str]:
     """
@@ -301,25 +306,48 @@ def delete_session(session_id: str):
 
 
 def cleanup_expired_sessions():
-    """
-    Remove expired sessions from memory.
-    Should be called periodically in production.
-    """
+    """Remove expired sessions from memory."""
     now = datetime.now()
-    expired_sessions = []
+    expired = [
+        sid for sid, s in user_sessions.items()
+        if s.get("created_at") and (now - s["created_at"]).total_seconds() > SESSION_COOKIE_MAX_AGE
+    ]
+    for sid in expired:
+        delete_session(sid)
+    if expired:
+        logger.info(f"Cleaned up {len(expired)} expired sessions")
 
-    for session_id, session in user_sessions.items():
-        created_at = session.get("created_at")
-        if created_at:
-            age = now - created_at
-            if age.total_seconds() > SESSION_COOKIE_MAX_AGE:
-                expired_sessions.append(session_id)
 
-    for session_id in expired_sessions:
-        delete_session(session_id)
+def invalidate_session_by_email(email: str) -> bool:
+    """
+    Invalidate all sessions for a user by email.
+    Call this when gateway rejects user (deleted/disabled).
+    Also adds email to pending_logouts for SSE push notification.
+    """
+    invalidated = []
+    for sid, session in list(user_sessions.items()):
+        user = session.get("user", {})
+        if user.get("email") == email:
+            invalidated.append(sid)
+            del user_sessions[sid]
 
-    if expired_sessions:
-        logger.info(f"Cleaned up {len(expired_sessions)} expired sessions")
+    if invalidated:
+        # Add to pending_logouts for SSE push notification
+        pending_logouts.add(email)
+        logger.warning(f"Invalidated {len(invalidated)} sessions for {email} (user removed from gateway)")
+        return True
+    return False
+
+
+def check_and_clear_pending_logout(email: str) -> bool:
+    """
+    Check if email has a pending logout and clear it.
+    Called by SSE endpoint after notifying the frontend.
+    """
+    if email in pending_logouts:
+        pending_logouts.discard(email)
+        return True
+    return False
 
 
 def get_current_user(request: Request) -> Optional[Dict[str, Any]]:

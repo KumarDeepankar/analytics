@@ -23,7 +23,7 @@ class Database:
     """
 
     # Database schema version
-    SCHEMA_VERSION = 4
+    SCHEMA_VERSION = 5
 
     # SQL schema definitions
     SCHEMA = """
@@ -127,6 +127,17 @@ class Database:
         FOREIGN KEY (role_id) REFERENCES rbac_roles(role_id) ON DELETE CASCADE
     );
 
+    -- OAuth Provider Group-to-Role Mappings
+    CREATE TABLE IF NOT EXISTS oauth_group_mappings (
+        mapping_id TEXT PRIMARY KEY,
+        provider_id TEXT NOT NULL,
+        group_identifier TEXT NOT NULL,
+        role_id TEXT NOT NULL,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(provider_id, group_identifier, role_id),
+        FOREIGN KEY (role_id) REFERENCES rbac_roles(role_id) ON DELETE CASCADE
+    );
+
     -- Gateway Configuration
     CREATE TABLE IF NOT EXISTS gateway_config (
         config_key TEXT PRIMARY KEY,
@@ -187,6 +198,8 @@ class Database:
     CREATE INDEX IF NOT EXISTS idx_servers_url ON mcp_servers(url);
     CREATE INDEX IF NOT EXISTS idx_ad_mappings_group ON ad_group_mappings(group_dn);
     CREATE INDEX IF NOT EXISTS idx_ad_mappings_role ON ad_group_mappings(role_id);
+    CREATE INDEX IF NOT EXISTS idx_oauth_group_mappings_provider ON oauth_group_mappings(provider_id);
+    CREATE INDEX IF NOT EXISTS idx_oauth_group_mappings_role ON oauth_group_mappings(role_id);
     CREATE INDEX IF NOT EXISTS idx_audit_timestamp ON audit_logs(timestamp);
     CREATE INDEX IF NOT EXISTS idx_audit_event_type ON audit_logs(event_type);
     CREATE INDEX IF NOT EXISTS idx_audit_user_id ON audit_logs(user_id);
@@ -286,20 +299,45 @@ class Database:
     def save_mcp_server(self, server_id: str, name: str, url: str, description: str = "",
                         capabilities: Dict[str, Any] = None, metadata: Dict[str, Any] = None,
                         registered_via: str = "ui") -> bool:
-        """Save or update MCP server"""
+        """Save or update MCP server.
+
+        Uses UPDATE for existing servers to avoid triggering CASCADE DELETE on
+        user_server_access, role_tool_permissions, and tool_local_credentials.
+        """
         try:
             with self.transaction() as conn:
-                conn.execute("""
-                    INSERT OR REPLACE INTO mcp_servers
-                    (server_id, name, url, description, capabilities, metadata, registered_via, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-                """, (
-                    server_id, name, url, description,
-                    json.dumps(capabilities or {}),
-                    json.dumps(metadata or {}),
-                    registered_via
-                ))
-                logger.info(f"Saved MCP server: {server_id}")
+                # Check if server exists first
+                cursor = conn.execute("SELECT 1 FROM mcp_servers WHERE server_id = ?", (server_id,))
+                exists = cursor.fetchone() is not None
+
+                if exists:
+                    # Use UPDATE to preserve foreign key relationships
+                    conn.execute("""
+                        UPDATE mcp_servers
+                        SET name = ?, url = ?, description = ?, capabilities = ?, metadata = ?,
+                            registered_via = ?, updated_at = CURRENT_TIMESTAMP
+                        WHERE server_id = ?
+                    """, (
+                        name, url, description,
+                        json.dumps(capabilities or {}),
+                        json.dumps(metadata or {}),
+                        registered_via,
+                        server_id
+                    ))
+                    logger.info(f"Updated MCP server: {server_id}")
+                else:
+                    # Insert new server
+                    conn.execute("""
+                        INSERT INTO mcp_servers
+                        (server_id, name, url, description, capabilities, metadata, registered_via, updated_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                    """, (
+                        server_id, name, url, description,
+                        json.dumps(capabilities or {}),
+                        json.dumps(metadata or {}),
+                        registered_via
+                    ))
+                    logger.info(f"Created MCP server: {server_id}")
                 return True
         except Exception as e:
             logger.error(f"Failed to save MCP server {server_id}: {e}")
@@ -349,20 +387,44 @@ class Database:
     def save_oauth_provider(self, provider_id: str, provider_name: str, client_id: str,
                            client_secret: str, authorize_url: str, token_url: str,
                            userinfo_url: str, scopes: List[str], enabled: bool = True) -> bool:
-        """Save or update OAuth provider"""
+        """Save or update OAuth provider.
+
+        Uses UPDATE for existing providers to avoid triggering CASCADE DELETE on
+        tool_oauth_associations.
+        """
         try:
             with self.transaction() as conn:
-                conn.execute("""
-                    INSERT OR REPLACE INTO oauth_providers
-                    (provider_id, provider_name, client_id, client_secret, authorize_url,
-                     token_url, userinfo_url, scopes, enabled)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, (
-                    provider_id, provider_name, client_id, client_secret,
-                    authorize_url, token_url, userinfo_url,
-                    json.dumps(scopes), enabled
-                ))
-                logger.info(f"Saved OAuth provider: {provider_id}")
+                # Check if provider exists first
+                cursor = conn.execute("SELECT 1 FROM oauth_providers WHERE provider_id = ?", (provider_id,))
+                exists = cursor.fetchone() is not None
+
+                if exists:
+                    # Use UPDATE to preserve foreign key relationships
+                    conn.execute("""
+                        UPDATE oauth_providers
+                        SET provider_name = ?, client_id = ?, client_secret = ?, authorize_url = ?,
+                            token_url = ?, userinfo_url = ?, scopes = ?, enabled = ?
+                        WHERE provider_id = ?
+                    """, (
+                        provider_name, client_id, client_secret,
+                        authorize_url, token_url, userinfo_url,
+                        json.dumps(scopes), enabled,
+                        provider_id
+                    ))
+                    logger.info(f"Updated OAuth provider: {provider_id}")
+                else:
+                    # Insert new provider
+                    conn.execute("""
+                        INSERT INTO oauth_providers
+                        (provider_id, provider_name, client_id, client_secret, authorize_url,
+                         token_url, userinfo_url, scopes, enabled)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (
+                        provider_id, provider_name, client_id, client_secret,
+                        authorize_url, token_url, userinfo_url,
+                        json.dumps(scopes), enabled
+                    ))
+                    logger.info(f"Created OAuth provider: {provider_id}")
                 return True
         except Exception as e:
             logger.error(f"Failed to save OAuth provider {provider_id}: {e}")
@@ -411,15 +473,33 @@ class Database:
 
     def save_role(self, role_id: str, role_name: str, description: str,
                   permissions: List[str], is_system: bool = False) -> bool:
-        """Save or update role"""
+        """Save or update role.
+
+        Uses UPDATE for existing roles to avoid triggering CASCADE DELETE on user_roles.
+        INSERT OR REPLACE would delete and re-insert, which cascades to user_roles.
+        """
         try:
             with self.transaction() as conn:
-                conn.execute("""
-                    INSERT OR REPLACE INTO rbac_roles
-                    (role_id, role_name, description, permissions, is_system, updated_at)
-                    VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-                """, (role_id, role_name, description, json.dumps(permissions), is_system))
-                logger.info(f"Saved role: {role_id}")
+                # Check if role exists first
+                cursor = conn.execute("SELECT 1 FROM rbac_roles WHERE role_id = ?", (role_id,))
+                exists = cursor.fetchone() is not None
+
+                if exists:
+                    # Use UPDATE to preserve foreign key relationships (user_roles)
+                    conn.execute("""
+                        UPDATE rbac_roles
+                        SET role_name = ?, description = ?, permissions = ?, is_system = ?, updated_at = CURRENT_TIMESTAMP
+                        WHERE role_id = ?
+                    """, (role_name, description, json.dumps(permissions), is_system, role_id))
+                    logger.info(f"Updated role: {role_id}")
+                else:
+                    # Insert new role
+                    conn.execute("""
+                        INSERT INTO rbac_roles
+                        (role_id, role_name, description, permissions, is_system, updated_at)
+                        VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                    """, (role_id, role_name, description, json.dumps(permissions), is_system))
+                    logger.info(f"Created role: {role_id}")
                 return True
         except Exception as e:
             logger.error(f"Failed to save role {role_id}: {e}")
@@ -522,9 +602,10 @@ class Database:
             row = cursor.fetchone()
             if row:
                 user = dict(row)
-                # Get user roles
+                # Get user roles - fresh query each time
                 cursor = conn.execute("SELECT role_id FROM user_roles WHERE user_id = ?", (user['user_id'],))
                 user['roles'] = [r['role_id'] for r in cursor.fetchall()]
+                logger.info(f"DEBUG get_user_by_email: {email} -> user_id={user['user_id']}, roles={user['roles']}")
                 return user
             return None
         except Exception as e:
@@ -571,6 +652,17 @@ class Database:
                 return True
         except Exception as e:
             logger.error(f"Failed to revoke role: {e}")
+            return False
+
+    def clear_user_roles(self, user_id: str) -> bool:
+        """Clear all roles from a user"""
+        try:
+            with self.transaction() as conn:
+                conn.execute("DELETE FROM user_roles WHERE user_id = ?", (user_id,))
+                logger.info(f"Cleared all roles from user {user_id}")
+                return True
+        except Exception as e:
+            logger.error(f"Failed to clear user roles: {e}")
             return False
 
     def update_user_last_login(self, user_id: str) -> bool:
@@ -758,6 +850,95 @@ class Database:
                 return True
         except Exception as e:
             logger.error(f"Failed to update AD mapping sync: {e}")
+            return False
+
+    # ===========================================
+    # OAuth Group Mappings Operations
+    # ===========================================
+
+    def save_oauth_group_mapping(self, mapping_id: str, provider_id: str,
+                                  group_identifier: str, role_id: str) -> bool:
+        """Save OAuth group-to-role mapping"""
+        try:
+            with self.transaction() as conn:
+                conn.execute("""
+                    INSERT OR REPLACE INTO oauth_group_mappings
+                    (mapping_id, provider_id, group_identifier, role_id)
+                    VALUES (?, ?, ?, ?)
+                """, (mapping_id, provider_id, group_identifier, role_id))
+                logger.info(f"Saved OAuth group mapping: {mapping_id}")
+                return True
+        except Exception as e:
+            logger.error(f"Failed to save OAuth group mapping {mapping_id}: {e}")
+            return False
+
+    def get_oauth_group_mapping(self, mapping_id: str) -> Optional[Dict[str, Any]]:
+        """Get OAuth group mapping by ID"""
+        try:
+            conn = self._get_connection()
+            cursor = conn.execute(
+                "SELECT * FROM oauth_group_mappings WHERE mapping_id = ?",
+                (mapping_id,)
+            )
+            row = cursor.fetchone()
+            return dict(row) if row else None
+        except Exception as e:
+            logger.error(f"Failed to get OAuth group mapping {mapping_id}: {e}")
+            return None
+
+    def get_all_oauth_group_mappings(self) -> List[Dict[str, Any]]:
+        """Get all OAuth group mappings"""
+        try:
+            conn = self._get_connection()
+            cursor = conn.execute(
+                "SELECT * FROM oauth_group_mappings ORDER BY created_at DESC"
+            )
+            return [dict(row) for row in cursor.fetchall()]
+        except Exception as e:
+            logger.error(f"Failed to get OAuth group mappings: {e}")
+            return []
+
+    def get_oauth_group_mappings_by_provider(self, provider_id: str) -> List[Dict[str, Any]]:
+        """Get OAuth group mappings for a specific provider"""
+        try:
+            conn = self._get_connection()
+            cursor = conn.execute(
+                "SELECT * FROM oauth_group_mappings WHERE provider_id = ? ORDER BY created_at DESC",
+                (provider_id,)
+            )
+            return [dict(row) for row in cursor.fetchall()]
+        except Exception as e:
+            logger.error(f"Failed to get OAuth group mappings for provider {provider_id}: {e}")
+            return []
+
+    def get_roles_for_oauth_groups(self, provider_id: str, group_identifiers: List[str]) -> List[str]:
+        """Get role IDs for matching OAuth groups"""
+        if not group_identifiers:
+            return []
+        try:
+            conn = self._get_connection()
+            placeholders = ','.join('?' * len(group_identifiers))
+            cursor = conn.execute(f"""
+                SELECT DISTINCT role_id FROM oauth_group_mappings
+                WHERE provider_id = ? AND group_identifier IN ({placeholders})
+            """, [provider_id] + group_identifiers)
+            return [row['role_id'] for row in cursor.fetchall()]
+        except Exception as e:
+            logger.error(f"Failed to get roles for OAuth groups: {e}")
+            return []
+
+    def delete_oauth_group_mapping(self, mapping_id: str) -> bool:
+        """Delete OAuth group mapping"""
+        try:
+            with self.transaction() as conn:
+                conn.execute(
+                    "DELETE FROM oauth_group_mappings WHERE mapping_id = ?",
+                    (mapping_id,)
+                )
+                logger.info(f"Deleted OAuth group mapping: {mapping_id}")
+                return True
+        except Exception as e:
+            logger.error(f"Failed to delete OAuth group mapping {mapping_id}: {e}")
             return False
 
     # ===========================================

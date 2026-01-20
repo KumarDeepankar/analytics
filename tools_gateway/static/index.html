@@ -398,6 +398,34 @@
                             <div id="rolesContainer"></div>
                         </div>
                     </div>
+
+                    <!-- OAuth Group Mappings Panel -->
+                    <div class="test-panel">
+                        <div class="test-panel-header">
+                            <div class="panel-title">
+                                <i class="fas fa-link"></i>
+                                OAuth Group Mappings
+                            </div>
+                            <div>
+                                <button class="btn btn-sm btn-primary" onclick="showAddOAuthGroupMappingModal()">
+                                    <i class="fas fa-plus"></i> Add Mapping
+                                </button>
+                                <button class="btn btn-sm btn-outline" onclick="syncOAuthUserRoles()" style="margin-left: 8px;">
+                                    <i class="fas fa-sync"></i> Sync Roles
+                                </button>
+                            </div>
+                        </div>
+                        <div class="test-panel-body">
+                            <div class="alert alert-info" style="margin-bottom: 15px;">
+                                <i class="fas fa-info-circle"></i>
+                                <strong>OAuth Group-to-Role Mappings</strong>
+                                <p>Map OAuth provider groups to system roles. When users log in via OAuth, their group memberships are extracted from the token and matched against these mappings to automatically assign roles. Use "Sync Roles" to re-apply mappings to existing users.</p>
+                            </div>
+                            <div id="oauthGroupMappingsContainer">
+                                <p class="text-muted">No OAuth group mappings configured. Add mappings to automatically assign roles based on OAuth provider groups.</p>
+                            </div>
+                        </div>
+                    </div>
                 </div>
 
                 <!-- Audit Logs Tab -->
@@ -1100,6 +1128,57 @@
                 <button class="btn btn-outline" onclick="closeModal('addUserModal')">Cancel</button>
                 <button class="btn btn-primary" onclick="saveNewUser()">
                     <i class="fas fa-save"></i> Add User
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Add OAuth Group Mapping Modal -->
+    <div id="addOAuthGroupMappingModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <div class="modal-title">
+                    <i class="fas fa-link"></i>
+                    Add OAuth Group Mapping
+                </div>
+                <button class="modal-close" onclick="closeModal('addOAuthGroupMappingModal')">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="alert alert-info" style="margin-bottom: 20px;">
+                    <i class="fas fa-info-circle"></i>
+                    <strong>Group Identifier</strong>
+                    <p style="margin-top: 5px; margin-bottom: 0;">Enter the exact group ID or name as it appears in your OAuth provider's response. For Azure AD, this is typically a GUID. For Google Workspace, it may be a domain (hd claim).</p>
+                </div>
+                <form id="addOAuthGroupMappingForm">
+                    <div class="form-group">
+                        <label class="form-label">OAuth Provider *</label>
+                        <select class="form-control" id="oauthGroupMappingProvider" required>
+                            <option value="">Select a provider...</option>
+                            <!-- Options will be populated dynamically -->
+                        </select>
+                        <small class="form-text">Select the OAuth provider this group belongs to</small>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label">Group Identifier *</label>
+                        <input type="text" class="form-control" id="oauthGroupMappingGroupId" placeholder="e.g., 12345678-1234-1234-1234-123456789abc" required>
+                        <small class="form-text">The exact group ID/name from your OAuth provider</small>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label">Assign Role *</label>
+                        <select class="form-control" id="oauthGroupMappingRole" required>
+                            <option value="">Select a role...</option>
+                            <!-- Options will be populated dynamically -->
+                        </select>
+                        <small class="form-text">Users in this group will be assigned this role</small>
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-outline" onclick="closeModal('addOAuthGroupMappingModal')">Cancel</button>
+                <button class="btn btn-primary" onclick="saveOAuthGroupMapping()">
+                    <i class="fas fa-save"></i> Create Mapping
                 </button>
             </div>
         </div>

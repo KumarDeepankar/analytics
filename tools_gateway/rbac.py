@@ -7,12 +7,14 @@ Uses SQLite database for storage
 import logging
 import secrets
 import hashlib
+import re
 from datetime import datetime
 from typing import Dict, Any, List, Optional, Set
 from enum import Enum
 from pydantic import BaseModel, Field
 from .database import database
 from .auth import jwt_manager
+from .permission_cache import permission_cache
 
 logger = logging.getLogger(__name__)
 
@@ -150,7 +152,7 @@ class RBACManager:
     Manages users, roles, and permissions
     """
 
-    # Default system roles
+    # Default system roles (only admin is created by default)
     DEFAULT_ROLES = {
         "admin": Role(
             role_id="admin",
@@ -166,26 +168,6 @@ class RBACManager:
                 Permission.AUDIT_VIEW, Permission.OAUTH_MANAGE
             },
             is_system=True
-        ),
-        "user": Role(
-            role_id="user",
-            role_name="Standard User",
-            description="Basic user access",
-            permissions={
-                Permission.SERVER_VIEW, Permission.TOOL_VIEW,
-                Permission.TOOL_EXECUTE, Permission.CONFIG_VIEW
-            },
-            is_system=True
-        ),
-        "viewer": Role(
-            role_id="viewer",
-            role_name="Viewer",
-            description="Read-only access",
-            permissions={
-                Permission.SERVER_VIEW, Permission.TOOL_VIEW,
-                Permission.CONFIG_VIEW
-            },
-            is_system=True
         )
     }
 
@@ -194,6 +176,73 @@ class RBACManager:
         self._initialize_default_roles()
         self._initialize_default_admin()
         logger.info("RBACManager initialized with SQLite database backend")
+
+    # --- Permission Caching ---
+
+    def _get_cached_permissions(self, user_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Get cached permission data for user, or build and cache if not present.
+
+        Returns dict with:
+        - enabled: bool
+        - roles: List[str] - role IDs
+        - is_admin: bool - has admin role
+        - permissions: Set[str] - permission values
+        - has_tool_execute: bool
+        - has_tool_manage: bool
+
+        Returns None if user not found.
+        """
+        # Check cache first
+        cached = permission_cache.get(user_id)
+        if cached is not None:
+            return cached
+
+        # Cache miss - build from database
+        user_data = database.get_user(user_id)
+        if not user_data:
+            return None
+
+        # Build permission data
+        roles = user_data.get('roles', [])
+        is_admin = 'admin' in roles
+        enabled = user_data.get('enabled', True)
+
+        # Aggregate permissions from all roles
+        permissions = set()
+        for role_id in roles:
+            role_data = database.get_role(role_id)
+            if role_data:
+                permissions.update(role_data.get('permissions', []))
+
+        # Build cache entry
+        cache_data = {
+            'enabled': enabled,
+            'roles': roles,
+            'is_admin': is_admin,
+            'permissions': permissions,
+            'has_tool_execute': Permission.TOOL_EXECUTE.value in permissions or is_admin,
+            'has_tool_manage': Permission.TOOL_MANAGE.value in permissions or is_admin,
+            'email': user_data.get('email')
+        }
+
+        # Store in cache
+        permission_cache.set(user_id, cache_data)
+        logger.debug(f"Built permission cache for user {user_id[:20]}...")
+
+        return cache_data
+
+    def _invalidate_user_cache(self, user_id: str) -> None:
+        """Invalidate permission cache for a specific user."""
+        permission_cache.invalidate_user(user_id)
+
+    def _invalidate_role_cache(self, role_id: str) -> None:
+        """Invalidate permission cache for all users with a specific role."""
+        def get_users_with_role(rid: str) -> List[str]:
+            users = database.get_all_users()
+            return [u['user_id'] for u in users if rid in u.get('roles', [])]
+
+        permission_cache.invalidate_by_role(role_id, get_users_with_role)
 
     def _initialize_default_roles(self):
         """Ensure default roles exist in database"""
@@ -241,7 +290,12 @@ class RBACManager:
     def create_role(self, role_name: str, description: str,
                     permissions: Optional[Set[Permission]] = None) -> Role:
         """Create a new role"""
-        role_id = f"role_{secrets.token_urlsafe(8)}"
+        # Generate role_id from role_name (lowercase, spaces/hyphens to underscores, alphanumeric only)
+        role_id = re.sub(r'[^a-z0-9_]', '', role_name.lower().replace(' ', '_').replace('-', '_'))
+
+        # Ensure role_id is not empty
+        if not role_id:
+            role_id = f"role_{secrets.token_urlsafe(8)}"
 
         # Convert permissions to list of strings
         perm_list = [p.value for p in (permissions or set())]
@@ -298,6 +352,9 @@ class RBACManager:
             is_system=role_data['is_system']
         )
 
+        # Invalidate cache for all users with this role
+        self._invalidate_role_cache(role_id)
+
         logger.info(f"Updated role: {role_id}")
 
         # Return role object
@@ -311,6 +368,9 @@ class RBACManager:
 
     def delete_role(self, role_id: str) -> bool:
         """Delete a role"""
+        # Invalidate cache BEFORE deletion (so we can still find users with this role)
+        self._invalidate_role_cache(role_id)
+
         # Use database.delete_role() which handles system role check and cascade deletion
         result = database.delete_role(role_id)
         if result:
@@ -368,9 +428,9 @@ class RBACManager:
         """Create a new local user with password"""
         user_id = f"user_{secrets.token_urlsafe(12)}"
 
-        # Default to 'user' role if none specified
+        # No default role - roles must be explicitly assigned (via admin or OAuth group mappings)
         if roles is None:
-            roles = {"user"}
+            roles = set()
 
         # Hash password
         password_hash = self._hash_password(password)
@@ -475,9 +535,9 @@ class RBACManager:
         """Create a new user"""
         user_id = f"user_{secrets.token_urlsafe(12)}"
 
-        # Default to 'user' role if none specified
+        # No default role - roles must be explicitly assigned (via admin or OAuth group mappings)
         if roles is None:
-            roles = {"user"}
+            roles = set()
 
         # Save user to database
         database.save_user(
@@ -527,7 +587,11 @@ class RBACManager:
             )
 
         # Create new user
-        return self.create_user(email, name, provider)
+        new_user = self.create_user(email, name, provider)
+        # Set last_login for first login
+        database.update_user_last_login(new_user.user_id)
+        new_user.last_login = datetime.now()
+        return new_user
 
     def get_user(self, user_id: str) -> Optional[User]:
         """Get user by ID"""
@@ -588,6 +652,9 @@ class RBACManager:
             enabled=enabled
         )
 
+        # Invalidate cache - user properties (especially 'enabled') affect permissions
+        self._invalidate_user_cache(user_id)
+
         logger.info(f"Updated user: {user_id}")
 
         # Fetch updated user and return as User object
@@ -611,6 +678,8 @@ class RBACManager:
         result = database.assign_role_to_user(user_id, role_id)
         if result:
             logger.info(f"Assigned role {role_id} to user {user_id}")
+            # Invalidate permission cache for this user
+            self._invalidate_user_cache(user_id)
         return result
 
     def revoke_role(self, user_id: str, role_id: str) -> bool:
@@ -619,6 +688,8 @@ class RBACManager:
         result = database.revoke_role_from_user(user_id, role_id)
         if result:
             logger.info(f"Revoked role {role_id} from user {user_id}")
+            # Invalidate permission cache for this user
+            self._invalidate_user_cache(user_id)
         return result
 
     def delete_user(self, user_id: str) -> bool:
@@ -628,6 +699,9 @@ class RBACManager:
         if not user_data:
             logger.error(f"User {user_id} not found")
             return False
+
+        # Invalidate cache before deletion
+        self._invalidate_user_cache(user_id)
 
         # Delete user from database
         result = database.delete_user(user_id)
@@ -666,42 +740,29 @@ class RBACManager:
     # --- Permission Checking ---
 
     def has_permission(self, user_id: str, permission: Permission) -> bool:
-        """Check if user has a specific permission"""
-        logger.info(f"🔍 has_permission check: user_id={user_id}, permission={permission.value}")
+        """Check if user has a specific permission (uses cache)"""
+        # Use cached permissions
+        cached = self._get_cached_permissions(user_id)
 
-        # Get user from database
-        user_data = database.get_user(user_id)
-        logger.info(f"🔍 User data retrieved: {user_data is not None}")
-
-        if not user_data:
-            logger.warning(f"❌ User {user_id} not found in database")
+        if cached is None:
+            logger.warning(f"❌ User {user_id} not found")
             return False
 
-        if not user_data.get('enabled', True):
+        if not cached['enabled']:
             logger.warning(f"❌ User {user_id} is disabled")
             return False
 
-        logger.info(f"🔍 User roles: {user_data.get('roles', [])}")
-
-        # SUPERUSER CHECK: Users with "admin" role have ALL permissions automatically
-        if 'admin' in user_data.get('roles', []):
-            logger.info(f"✅ User {user_id} has 'admin' role - SUPERUSER - granting {permission.value} automatically")
+        # SUPERUSER CHECK
+        if cached['is_admin']:
+            logger.debug(f"✅ User {user_id} is admin - granting {permission.value}")
             return True
 
-        # Check all user's roles for the permission
-        for role_id in user_data.get('roles', []):
-            role_data = database.get_role(role_id)
-            logger.info(f"🔍 Checking role {role_id}: role_data={role_data is not None}")
+        # Check permission in cached set
+        if permission.value in cached['permissions']:
+            logger.debug(f"✅ Permission {permission.value} found for user {user_id}")
+            return True
 
-            if role_data:
-                logger.info(f"🔍 Role {role_id} permissions: {role_data.get('permissions', [])}")
-                if permission.value in role_data['permissions']:
-                    logger.info(f"✅ Permission {permission.value} FOUND in role {role_id}")
-                    return True
-                else:
-                    logger.info(f"⚠️  Permission {permission.value} NOT in role {role_id}")
-
-        logger.warning(f"❌ Permission {permission.value} NOT FOUND in any role for user {user_id}")
+        logger.debug(f"❌ Permission {permission.value} not found for user {user_id}")
         return False
 
     def has_any_permission(self, user_id: str, permissions: List[Permission]) -> bool:
@@ -713,23 +774,19 @@ class RBACManager:
         return all(self.has_permission(user_id, perm) for perm in permissions)
 
     def get_user_permissions(self, user_id: str) -> Set[Permission]:
-        """Get all permissions for a user"""
-        # Get user from database
-        user_data = database.get_user(user_id)
-        if not user_data or not user_data.get('enabled', True):
+        """Get all permissions for a user (uses cache)"""
+        cached = self._get_cached_permissions(user_id)
+
+        if cached is None or not cached['enabled']:
             return set()
 
-        # Aggregate permissions from all user's roles
+        # Convert cached permission strings to Permission enums
         permissions = set()
-        for role_id in user_data.get('roles', []):
-            role_data = database.get_role(role_id)
-            if role_data:
-                # Convert permission strings to Permission enums
-                for perm_str in role_data['permissions']:
-                    try:
-                        permissions.add(Permission(perm_str))
-                    except ValueError:
-                        logger.warning(f"Invalid permission string: {perm_str}")
+        for perm_str in cached['permissions']:
+            try:
+                permissions.add(Permission(perm_str))
+            except ValueError:
+                pass  # Skip invalid permissions
 
         return permissions
 
@@ -784,7 +841,7 @@ class RBACManager:
 
     def can_execute_tool(self, user_id: str, server_id: str, tool_name: str) -> bool:
         """
-        Check if user can execute a specific tool on a server.
+        Check if user can execute a specific tool on a server (uses cache).
 
         RBAC Policy (Deny by Default):
         - Admin role: Full access to all tools
@@ -792,85 +849,81 @@ class RBACManager:
         - Other users: Only tools explicitly assigned to their role(s)
         - No assignment = Access Denied (secure default)
         """
-        user_data = database.get_user(user_id)
-        if not user_data or not user_data.get('enabled', True):
+        # Use cached permissions for fast checks
+        cached = self._get_cached_permissions(user_id)
+
+        if cached is None or not cached['enabled']:
             logger.warning(f"❌ RBAC: User {user_id} not found or disabled")
             return False
 
-        # SUPERUSER CHECK: Users with "admin" role can execute all tools
-        if 'admin' in user_data.get('roles', []):
-            logger.info(f"✅ RBAC: User {user_id} has 'admin' role - SUPERUSER - allowing tool {tool_name}")
+        # SUPERUSER CHECK (from cache)
+        if cached['is_admin']:
+            logger.debug(f"✅ RBAC: User {user_id} is admin - allowing tool {tool_name}")
             return True
 
-        # Must have tool execute permission
-        if not self.has_permission(user_id, Permission.TOOL_EXECUTE):
+        # Must have tool execute permission (from cache)
+        if not cached['has_tool_execute']:
             logger.warning(f"❌ RBAC: User {user_id} lacks TOOL_EXECUTE permission")
             return False
 
-        # Users with TOOL_MANAGE can execute all tools
-        if self.has_permission(user_id, Permission.TOOL_MANAGE):
-            logger.info(f"✅ RBAC: User {user_id} has TOOL_MANAGE - allowing all tools")
+        # Users with TOOL_MANAGE can execute all tools (from cache)
+        if cached['has_tool_manage']:
+            logger.debug(f"✅ RBAC: User {user_id} has TOOL_MANAGE - allowing all tools")
             return True
 
-        # Check role-based tool access (EXPLICIT ASSIGNMENT REQUIRED)
-        user_roles = user_data.get('roles', [])
-
-        # Collect all allowed tools from all roles
-        for role_id in user_roles:
-            # Get allowed tools for this role on this server
+        # Check role-based tool access (still needs DB query for tool mappings)
+        checked_roles = []
+        for role_id in cached['roles']:
             allowed_tools = database.get_role_tools_by_server(role_id, server_id)
-
-            # If tool is in allowed list, grant access
+            checked_roles.append({'role': role_id, 'allowed_tools': allowed_tools})
             if allowed_tools and tool_name in allowed_tools:
-                logger.info(f"✅ RBAC: Tool '{tool_name}' explicitly allowed for role '{role_id}' on server '{server_id}'")
+                logger.debug(f"✅ RBAC: Tool '{tool_name}' allowed for role '{role_id}'")
                 return True
 
-        # DENY BY DEFAULT: No explicit permission found
-        logger.warning(f"❌ RBAC: User {user_id} (email: {user_data.get('email')}) denied access to tool '{tool_name}' on server '{server_id}' - No explicit role assignment found")
+        # DENY BY DEFAULT - log details to help diagnose
+        logger.info(f"❌ RBAC: User {cached.get('email', user_id)} denied access to tool '{tool_name}' on server '{server_id}'")
+        logger.info(f"   User roles: {cached['roles']}, has_tool_execute: {cached['has_tool_execute']}")
+        logger.info(f"   Checked role-tool mappings: {checked_roles}")
         return False
 
     def get_user_allowed_tools(self, user_id: str, server_id: str) -> Optional[List[str]]:
         """
-        Get list of allowed tools for a user on a specific server.
+        Get list of allowed tools for a user on a specific server (uses cache).
         Returns None if user can access all tools, or a list of allowed tool names.
         """
-        user_data = database.get_user(user_id)
-        if not user_data or not user_data.get('enabled', True):
+        # Use cached permissions for fast checks
+        cached = self._get_cached_permissions(user_id)
+
+        if cached is None or not cached['enabled']:
             return []
 
-        # SUPERUSER CHECK: Users with "admin" role can access all tools
-        if 'admin' in user_data.get('roles', []):
-            logger.info(f"✅ User {user_id} has 'admin' role - SUPERUSER - allowing all tools")
+        # SUPERUSER CHECK (from cache)
+        if cached['is_admin']:
+            logger.debug(f"✅ User {user_id} is admin - allowing all tools")
             return None  # None means all tools
 
-        # Admins can access all tools
-        if self.has_permission(user_id, Permission.TOOL_MANAGE):
+        # TOOL_MANAGE can access all tools (from cache)
+        if cached['has_tool_manage']:
             return None  # None means all tools
 
-        # Aggregate allowed tools from all user roles
+        # Aggregate allowed tools from all user roles (still needs DB for tool mappings)
         allowed_tools = set()
         has_restrictions = False
 
-        user_roles = user_data.get('roles', [])
-        for role_id in user_roles:
+        for role_id in cached['roles']:
             role_tools = database.get_role_tools_by_server(role_id, server_id)
 
             if role_tools:
-                # This role has specific tool restrictions
                 allowed_tools.update(role_tools)
                 has_restrictions = True
             else:
-                # Check if this role has tool restrictions for ANY server
                 all_role_permissions = database.get_role_tool_permissions(role_id)
                 if not all_role_permissions:
-                    # No restrictions at all for this role - user can access all tools
                     return None
 
-        # If we have any restrictions, return the aggregated list
         if has_restrictions:
             return list(allowed_tools)
 
-        # No restrictions found - allow all tools
         return None
 
 

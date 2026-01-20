@@ -565,3 +565,97 @@ def reload_jwt_manager():
     )
 
     return jwt_manager
+
+
+def parse_ldap_dn_group(dn_string: str) -> str:
+    """
+    Extract CN (Common Name) from LDAP DN format.
+    Non-DN strings pass through unchanged.
+
+    Examples:
+        'CN=group_name,OU=xyz,DC=com' -> 'group_name' (parsed)
+        'abc123-guid-456'             -> 'abc123-guid-456' (unchanged)
+        'example.com'                 -> 'example.com' (unchanged)
+    """
+    if dn_string.upper().startswith('CN='):
+        return dn_string[3:].split(',')[0]
+    return dn_string
+
+
+def extract_groups_from_response(raw_data: Dict[str, Any]) -> List[str]:
+    """
+    Extract group identifiers from OAuth provider response.
+
+    Groups are embedded in the OAuth token/userinfo response.
+    Different providers use different claim names:
+    - Microsoft/Azure AD: 'groups' claim (list of group IDs)
+    - Google Workspace: 'hd' (hosted domain) or custom claims
+    - Custom OIDC: typically 'groups' or 'group' claim
+    - GitHub: organizations via 'orgs' or org membership
+
+    Args:
+        raw_data: The raw user data dictionary from OAuth provider
+
+    Returns:
+        List of group identifier strings (empty list if no groups found)
+    """
+    groups = []
+
+    # Common group claim paths to check
+    # Microsoft Azure AD uses 'groups' (list of GUIDs)
+    if 'groups' in raw_data and isinstance(raw_data['groups'], list):
+        groups.extend([parse_ldap_dn_group(str(g)) for g in raw_data['groups']])
+
+    # Some providers use 'group' (singular)
+    if 'group' in raw_data:
+        if isinstance(raw_data['group'], list):
+            groups.extend([parse_ldap_dn_group(str(g)) for g in raw_data['group']])
+        elif isinstance(raw_data['group'], str):
+            groups.append(parse_ldap_dn_group(raw_data['group']))
+
+    # Microsoft Azure AD may also use 'wids' for well-known role IDs
+    if 'wids' in raw_data and isinstance(raw_data['wids'], list):
+        groups.extend([parse_ldap_dn_group(str(w)) for w in raw_data['wids']])
+
+    # Some LDAP/OIDC providers use 'memberOf'
+    if 'memberOf' in raw_data and isinstance(raw_data['memberOf'], list):
+        groups.extend([parse_ldap_dn_group(str(m)) for m in raw_data['memberOf']])
+
+    # Google Workspace hosted domain
+    if 'hd' in raw_data and isinstance(raw_data['hd'], str):
+        groups.append(raw_data['hd'])
+
+    # GitHub organizations (if included in response)
+    if 'organizations' in raw_data and isinstance(raw_data['organizations'], list):
+        for org in raw_data['organizations']:
+            if isinstance(org, dict) and 'login' in org:
+                groups.append(org['login'])
+            elif isinstance(org, str):
+                groups.append(org)
+
+    # Custom claims (some providers use custom attribute names)
+    for key in ['roles', 'role', 'team', 'teams', 'department', 'departments']:
+        if key in raw_data:
+            value = raw_data[key]
+            if isinstance(value, list):
+                groups.extend([parse_ldap_dn_group(str(v)) for v in value])
+            elif isinstance(value, str):
+                groups.append(parse_ldap_dn_group(value))
+
+    # Email domain extraction (fallback for providers without group claims)
+    # Extracts domain from email (e.g., "user@example.com" -> "example.com")
+    email = raw_data.get('email')
+    if email and isinstance(email, str) and '@' in email:
+        email_domain = email.split('@')[1].lower()
+        groups.append(email_domain)
+
+    # Remove duplicates while preserving order
+    seen = set()
+    unique_groups = []
+    for g in groups:
+        if g not in seen:
+            seen.add(g)
+            unique_groups.append(g)
+
+    logger.debug(f"Extracted {len(unique_groups)} groups from OAuth response: {unique_groups}")
+    return unique_groups

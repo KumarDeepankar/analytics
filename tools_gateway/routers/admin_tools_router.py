@@ -166,6 +166,23 @@ async def set_tool_roles(request: Request, server_id: str, tool_name: str, reque
             database.set_role_tools_for_server(role_id, server_id, updated_tools)
             logger.debug(f"Added tool '{tool_name}' to role '{role_id}'")
 
+    # STEP 3: Invalidate permission cache for all affected users
+    # This ensures users see the updated tool permissions immediately
+    from tools_gateway.permission_cache import permission_cache
+    affected_role_ids = set(role_ids)
+    # Also include roles that had the tool removed
+    for role in all_roles:
+        if database.get_role_tools_by_server(role['role_id'], server_id):
+            affected_role_ids.add(role['role_id'])
+
+    # Get all users with affected roles and invalidate their cache
+    all_users = database.get_all_users()
+    for u in all_users:
+        user_roles = set(u.get('roles', []))
+        if user_roles & affected_role_ids:  # Intersection
+            permission_cache.invalidate_user(u['user_id'])
+            logger.debug(f"Invalidated cache for user {u['email']} after tool permission change")
+
     # Log the audit event
     audit_logger.log_event(
         AuditEventType.CONFIG_UPDATED,

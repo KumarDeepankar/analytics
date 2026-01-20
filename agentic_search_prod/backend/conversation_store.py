@@ -29,9 +29,17 @@ def get_backend() -> ConversationStorageBackend:
     """Get or create the storage backend instance."""
     global _backend
     if _backend is None:
-        _backend = StorageFactory.from_env()
-        _backend.init()
-        logger.info(f"Initialized storage backend: {type(_backend).__name__}")
+        try:
+            _backend = StorageFactory.from_env()
+            _backend.init()
+            logger.info(f"Initialized storage backend: {type(_backend).__name__}")
+        except Exception as e:
+            # Fallback to SQLite if configured backend fails (e.g., AWS credentials missing)
+            logger.warning(f"⚠️ Failed to initialize configured storage backend: {e}")
+            logger.warning("⚠️ Falling back to SQLite storage. Conversations will be stored locally only.")
+            _backend = StorageFactory.create("sqlite")
+            _backend.init()
+            logger.info(f"Initialized fallback storage backend: {type(_backend).__name__}")
     return _backend
 
 

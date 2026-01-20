@@ -7,24 +7,42 @@ import { getBackendUrl } from './config';
 import type { Tool } from './types';
 import './styles/animations.css';
 
+// Check for error params synchronously before component renders
+function getInitialErrorState(): string | null {
+  const urlParams = new URLSearchParams(window.location.search);
+  const error = urlParams.get('error');
+  const message = urlParams.get('message');
+
+  if (error === 'access_denied') {
+    // Clean up URL immediately
+    window.history.replaceState({}, document.title, window.location.pathname);
+    return message || 'Access denied. Please contact your administrator.';
+  }
+  return null;
+}
+
 function App() {
+  // Initialize accessDenied synchronously from URL params
+  const [accessDenied] = useState<string | null>(() => getInitialErrorState());
   const [tools, setTools] = useState<Tool[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  const [isLoading, setIsLoading] = useState(!accessDenied); // Don't show loading if error
   const [authError, setAuthError] = useState(false);
 
-  // Load tools on mount
+  // Load tools on mount and subscribe to session events via SSE
   useEffect(() => {
+    // Skip if access is already denied
+    if (accessDenied) return;
+
     const loadTools = async () => {
       try {
         const fetchedTools = await apiClient.getTools();
         setTools(fetchedTools);
       } catch (error: any) {
-
         // Check if it's an authentication error
         if (error.message?.includes('401') || error.message?.includes('403') || error.message?.includes('Authentication required')) {
+          // Clear cached data
+          localStorage.removeItem('enabledTools');
           setAuthError(true);
-          // Redirect to backend login page
-          // Backend will show redirect_to_app.html which redirects back to React app
           window.location.href = getBackendUrl('/auth/login');
         }
       } finally {
@@ -33,7 +51,33 @@ function App() {
     };
 
     loadTools();
-  }, []);
+
+    // Subscribe to session events via SSE for real-time logout notifications
+    const eventSource = new EventSource(getBackendUrl('/auth/session-events'), {
+      withCredentials: true
+    });
+
+    eventSource.addEventListener('logout', (event) => {
+      console.log('Received logout event:', event.data);
+      localStorage.removeItem('enabledTools');
+      setAuthError(true);
+      window.location.href = getBackendUrl('/auth/login');
+    });
+
+    eventSource.addEventListener('heartbeat', () => {
+      // Connection is alive, no action needed
+    });
+
+    eventSource.onerror = (error) => {
+      console.warn('SSE connection error:', error);
+      // Don't redirect on SSE error - might be temporary network issue
+      // The backend will still reject requests if session is invalid
+    };
+
+    return () => {
+      eventSource.close();
+    };
+  }, [accessDenied]);
 
   // Initialize enabled tools
   useEffect(() => {
@@ -43,6 +87,66 @@ function App() {
       localStorage.setItem('enabledTools', JSON.stringify(enabledTools));
     }
   }, [tools]);
+
+  if (accessDenied) {
+    return (
+      <div
+        style={{
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          justifyContent: 'center',
+          height: '100vh',
+          backgroundColor: '#0A1929',
+          color: '#E7EBF0',
+          fontSize: '18px',
+          gap: '16px',
+          padding: '20px',
+          textAlign: 'center',
+          animation: 'fadeIn 0.5s cubic-bezier(0.16, 1, 0.3, 1)',
+        }}
+      >
+        <div style={{ fontSize: '48px', animation: 'scaleIn 0.6s cubic-bezier(0.16, 1, 0.3, 1)' }}>🚫</div>
+        <div style={{ fontSize: '24px', fontWeight: 'bold', color: '#ff6b6b' }}>Authentication Failed!</div>
+        <div style={{ fontSize: '16px', color: '#E7EBF0', marginTop: '8px' }}>Access Denied</div>
+        <div style={{ fontSize: '14px', color: '#B2BAC2', maxWidth: '500px', marginTop: '8px' }}>
+          {decodeURIComponent(accessDenied)}
+        </div>
+        <div style={{
+          fontSize: '13px',
+          color: '#90A4AE',
+          maxWidth: '450px',
+          marginTop: '16px',
+          padding: '12px',
+          backgroundColor: 'rgba(255,255,255,0.05)',
+          borderRadius: '8px'
+        }}>
+          Your account does not have the required role mappings to access this application.
+          Please contact your administrator to configure group-to-role mappings.
+        </div>
+        <div style={{ marginTop: '24px' }}>
+          <button
+            onClick={() => window.location.href = getBackendUrl('/auth/login')}
+            style={{
+              padding: '12px 24px',
+              backgroundColor: '#1976d2',
+              color: 'white',
+              border: 'none',
+              borderRadius: '6px',
+              cursor: 'pointer',
+              fontSize: '14px',
+              fontWeight: '500',
+              transition: 'background-color 0.2s',
+            }}
+            onMouseOver={(e) => e.currentTarget.style.backgroundColor = '#1565c0'}
+            onMouseOut={(e) => e.currentTarget.style.backgroundColor = '#1976d2'}
+          >
+            Try Again
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   if (authError) {
     return (

@@ -3,7 +3,8 @@ Authentication Router
 Handles user authentication, OAuth flows, and session management
 """
 import logging
-from typing import Dict, Any
+import os
+from typing import Dict, Any, Optional
 
 from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import JSONResponse, FileResponse, RedirectResponse
@@ -12,8 +13,15 @@ from tools_gateway import oauth_provider_manager, jwt_manager, UserInfo
 from tools_gateway import rbac_manager
 from tools_gateway import audit_logger, AuditEventType, AuditSeverity
 from tools_gateway import get_current_user
+from tools_gateway.auth import extract_groups_from_response
+from tools_gateway.database import database
 
 logger = logging.getLogger(__name__)
+
+# Configuration: Require at least one role for SSO login
+# If True, users without any role (from group mappings) cannot login
+# Set REQUIRE_ROLE_FOR_LOGIN=false to allow users without roles
+REQUIRE_ROLE_FOR_LOGIN = os.getenv("REQUIRE_ROLE_FOR_LOGIN", "true").lower() in ("true", "1", "yes")
 
 router = APIRouter(prefix="/auth", tags=["authentication"])
 
@@ -56,6 +64,15 @@ async def get_oauth_provider_details(provider_id: str):
     }
 
     return JSONResponse(content=provider_details)
+
+
+@router.get("/login")
+async def login_page():
+    """Serve the login page HTML"""
+    from fastapi.responses import FileResponse
+    from pathlib import Path
+    static_dir = Path(__file__).parent.parent / "static"
+    return FileResponse(str(static_dir / "login.html"))
 
 
 @router.post("/login/local")
@@ -134,8 +151,28 @@ async def oauth_login(request: Request, provider_id: str):
 
 
 @router.get("/callback")
-async def oauth_callback(request: Request, code: str, state: str):
-    """Handle OAuth callback"""
+async def oauth_callback(
+    request: Request,
+    code: Optional[str] = None,
+    state: Optional[str] = None,
+    error: Optional[str] = None,
+    message: Optional[str] = None
+):
+    """Handle OAuth callback - also handles error redirects"""
+    # Check for error redirect first (e.g., from failed role mapping)
+    if error:
+        logger.warning(f"OAuth callback received error: {error}, message: {message}")
+        from urllib.parse import quote
+        login_url = f"/auth/login?error={error}"
+        if message:
+            login_url += f"&message={quote(message, safe='')}"
+        return RedirectResponse(url=login_url)
+
+    # code and state are required for normal OAuth flow
+    if not code or not state:
+        logger.error("OAuth callback missing code or state")
+        return RedirectResponse(url="/auth/login?error=invalid_request&message=Missing%20authorization%20code")
+
     try:
         logger.info(f"OAuth callback received - code: {code[:20]}..., state: {state[:20]}...")
 
@@ -168,6 +205,86 @@ async def oauth_callback(request: Request, code: str, state: str):
             provider=provider_id
         )
         logger.info(f"User created/retrieved: user_id={user.user_id}, email={user.email}, roles={user.roles}")
+
+        # Extract groups from OAuth response and assign roles based on mappings
+        # DEBUG: Log raw OAuth response to see available claims (remove in production)
+        logger.info(f"DEBUG - Raw OAuth response for {provider_id}: {user_info.raw_data}")
+
+        groups = extract_groups_from_response(user_info.raw_data)
+        logger.info(f"Extracted groups from OAuth response: {groups}")
+
+        # Get roles from group mappings
+        role_ids = database.get_roles_for_oauth_groups(provider_id, groups) if groups else []
+        logger.info(f"Roles from group mappings: {role_ids}")
+
+        # Store existing roles before any changes
+        old_roles = list(user.roles) if user.roles else []
+
+        # Invalidate cache BEFORE any role changes
+        from tools_gateway.permission_cache import permission_cache
+        permission_cache.invalidate_user(user.user_id)
+
+        # Role assignment strategy:
+        # - If group mappings returned roles: use those (clear and re-assign)
+        # - If group mappings returned NO roles: preserve existing roles (don't lock out manually assigned users)
+        if role_ids:
+            # Group mappings found - use them as source of truth
+            database.clear_user_roles(user.user_id)
+            logger.info(f"Cleared existing roles for user {user.email}: {old_roles}")
+
+            # Assign roles from group mappings
+            for role_id in role_ids:
+                rbac_manager.assign_role(user.user_id, role_id)
+            logger.info(f"Assigned roles from group mappings: {role_ids}")
+        else:
+            # No group mappings matched - preserve existing roles
+            # This prevents locking out users who were manually assigned roles
+            logger.info(f"No group mappings matched for {user.email}, preserving existing roles: {old_roles}")
+
+        # Refresh user to get updated roles
+        user = rbac_manager.get_user(user.user_id)
+        logger.info(f"Updated user roles after OAuth login: {user.roles}")
+
+        # Check if user has at least one role (required for access)
+        if REQUIRE_ROLE_FOR_LOGIN and (not user.roles or len(user.roles) == 0):
+            # User has no roles - deny login
+            logger.warning(f"Login denied for {user.email}: No roles assigned (no matching group mappings)")
+
+            # Log the failed login attempt
+            audit_logger.log_event(
+                AuditEventType.AUTH_LOGIN_FAILURE,
+                severity=AuditSeverity.WARNING,
+                user_id=user.user_id,
+                user_email=user.email,
+                ip_address=request.client.host if request.client else None,
+                details={
+                    "provider": provider_id,
+                    "reason": "no_role_mapping",
+                    "extracted_groups": groups
+                },
+                success=False
+            )
+
+            # Delete the user since they have no access
+            # This prevents orphaned users in the database
+            rbac_manager.delete_user(user.user_id)
+            logger.info(f"Deleted user {user.email} - no role mappings found")
+
+            # Return error page or redirect with error
+            from urllib.parse import quote
+            error_message = "Access denied: Your account is not authorized. Please contact your administrator to set up group-to-role mappings."
+            encoded_message = quote(error_message, safe='')
+            redirect_to = pending_redirects.pop(state, None)
+            logger.info(f"No role mapping - redirecting with error to: {redirect_to}")
+            if redirect_to:
+                redirect_url = f"{redirect_to}?error=access_denied&message={encoded_message}"
+                logger.info(f"Full redirect URL: {redirect_url}")
+                return RedirectResponse(url=redirect_url)
+            else:
+                # No cross-origin redirect - redirect to local login page with error
+                login_url = f"/auth/login?error=access_denied&message={encoded_message}"
+                logger.info(f"Redirecting to local login with error: {login_url}")
+                return RedirectResponse(url=login_url)
 
         # Create JWT access token for MCP gateway
         access_token = jwt_manager.create_access_token(user_info)
@@ -326,88 +443,3 @@ async def login_redirect(request: Request, provider_id: str, redirect_to: str):
     return RedirectResponse(url=auth_data['url'])
 
 
-@router.get("/callback-redirect")
-async def callback_redirect(request: Request, code: str, state: str):
-    """
-    OAuth callback that redirects to external service with JWT.
-    Used for cross-origin authentication flows.
-    """
-    try:
-        logger.info(f"OAuth callback-redirect received - state: {state[:20]}...")
-
-        # Get stored redirect URL
-        redirect_to = pending_redirects.pop(state, None)
-        if not redirect_to:
-            logger.error("No pending redirect found for state - may have expired")
-            raise HTTPException(status_code=400, detail="Invalid or expired OAuth state")
-
-        # Exchange code for token
-        result = await oauth_provider_manager.exchange_code_for_token(code, state)
-        if not result:
-            logger.error("Failed to exchange authorization code")
-            raise HTTPException(status_code=400, detail="Failed to exchange authorization code")
-
-        oauth_token, provider_id = result
-        logger.info(f"Token exchange successful for provider: {provider_id}")
-
-        # Get user info from provider
-        user_info = await oauth_provider_manager.get_user_info(provider_id, oauth_token.access_token)
-        if not user_info:
-            logger.error("Failed to retrieve user information from provider")
-            raise HTTPException(status_code=400, detail="Failed to retrieve user information")
-
-        logger.info(f"User info retrieved: email={user_info.email}, name={user_info.name}")
-
-        # Validate email exists
-        if not user_info.email:
-            logger.error("User email is missing from OAuth provider response")
-            raise HTTPException(status_code=400, detail="Email not provided by OAuth provider")
-
-        # Get or create user in RBAC system
-        user = rbac_manager.get_or_create_user(
-            email=user_info.email,
-            name=user_info.name,
-            provider=provider_id
-        )
-        logger.info(f"User created/retrieved: user_id={user.user_id}, email={user.email}, roles={user.roles}")
-
-        # Create JWT access token for MCP gateway
-        access_token = jwt_manager.create_access_token(user_info)
-        logger.info(f"JWT token created for user: {user.email}")
-
-        audit_logger.log_event(
-            AuditEventType.AUTH_LOGIN_SUCCESS,
-            user_id=user.user_id,
-            user_email=user.email,
-            ip_address=request.client.host if request.client else None,
-            details={
-                "provider": provider_id,
-                "redirect_to": redirect_to
-            }
-        )
-
-        # Redirect to external service with token as query parameter
-        from urllib.parse import urlencode
-        redirect_url = f"{redirect_to}?token={access_token}"
-        logger.info(f"Redirecting to external service: {redirect_to[:50]}...")
-
-        return RedirectResponse(url=redirect_url)
-
-    except HTTPException:
-        # Re-raise HTTP exceptions as-is
-        raise
-    except Exception as e:
-        import traceback
-        error_details = traceback.format_exc()
-        logger.error(f"OAuth callback-redirect error: {type(e).__name__}: {e}")
-        logger.debug(f"OAuth callback-redirect error details: {error_details}")
-
-        audit_logger.log_event(
-            AuditEventType.AUTH_LOGIN_FAILURE,
-            severity=AuditSeverity.ERROR,
-            ip_address=request.client.host if request.client else None,
-            details={"error": str(e), "traceback": error_details},
-            success=False
-        )
-
-        raise HTTPException(status_code=500, detail=f"Authentication failed: {str(e)}")

@@ -314,8 +314,8 @@
                     Sign in with credentials
                 </div>
 
-                <!-- Error Message -->
-                <div class="alert alert-danger" id="localLoginError"></div>
+                <!-- Error Message (for login errors and OAuth errors) -->
+                <div class="alert alert-danger" id="loginError"></div>
 
                 <!-- Login Form -->
                 <form id="localLoginForm" onsubmit="return handleLocalLogin(event);">
@@ -350,10 +350,51 @@
         let oauthProviders = [];
         let isSubmitting = false;
 
-        // Load OAuth providers on page load
+        // Load OAuth providers on page load and check for error params
         document.addEventListener('DOMContentLoaded', function() {
+            checkForErrors();
             loadOAuthProviders();
         });
+
+        /**
+         * Check URL for error parameters and display them
+         */
+        function checkForErrors() {
+            console.log('checkForErrors called');
+            console.log('Current URL:', window.location.href);
+            console.log('Search params:', window.location.search);
+
+            const urlParams = new URLSearchParams(window.location.search);
+            const error = urlParams.get('error');
+            const message = urlParams.get('message');
+
+            console.log('Error param:', error);
+            console.log('Message param:', message);
+
+            if (error || message) {
+                const errorDiv = document.getElementById('loginError');
+                console.log('Error div found:', errorDiv);
+
+                let errorText = '';
+
+                if (error === 'access_denied') {
+                    errorText = '🚫 Authentication Failed! ';
+                }
+
+                if (message) {
+                    errorText += decodeURIComponent(message);
+                } else if (error) {
+                    errorText += error.replace(/_/g, ' ');
+                }
+
+                console.log('Setting error text:', errorText);
+                errorDiv.innerHTML = errorText;
+                errorDiv.style.display = 'block';
+
+                // Clean up URL
+                window.history.replaceState({}, document.title, window.location.pathname);
+            }
+        }
 
         /**
          * Load available OAuth providers
@@ -423,7 +464,7 @@
 
             const email = document.getElementById('localEmail').value;
             const password = document.getElementById('localPassword').value;
-            const errorDiv = document.getElementById('localLoginError');
+            const errorDiv = document.getElementById('loginError');
             const loginButton = document.getElementById('loginButton');
 
             // Show loading state
@@ -486,13 +527,13 @@
                     // Redirect to OAuth provider
                     window.location.href = data.url;
                 } else {
-                    const errorDiv = document.getElementById('localLoginError');
+                    const errorDiv = document.getElementById('loginError');
                     errorDiv.textContent = 'Failed to initiate OAuth login';
                     errorDiv.style.display = 'block';
                 }
             } catch (error) {
                 console.error('OAuth login failed:', error);
-                const errorDiv = document.getElementById('localLoginError');
+                const errorDiv = document.getElementById('loginError');
                 errorDiv.textContent = 'Failed to initiate OAuth login';
                 errorDiv.style.display = 'block';
             }

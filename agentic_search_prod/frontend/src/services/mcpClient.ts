@@ -335,6 +335,15 @@ export class MCPClient {
       });
 
       if (!response.ok) {
+        // Auth error - user deleted/disabled from gateway
+        if (response.status === 401 || response.status === 403) {
+          console.warn('Auth rejected by gateway - clearing cache and token');
+          this.invalidateToolsCache();
+          this.clearToken();
+          // Redirect to login
+          window.location.href = '/login';
+          return [];
+        }
         throw new Error(`Failed to fetch tools: ${response.statusText}`);
       }
 
@@ -347,10 +356,14 @@ export class MCPClient {
 
       return tools;
     } catch (error) {
-
-      // Return cached tools if available (stale is better than error)
+      // Don't return stale cache on auth errors
+      if (error instanceof Error && error.message.includes('401')) {
+        this.invalidateToolsCache();
+        this.clearToken();
+        return [];
+      }
+      // Return cached tools for other errors (network issues, etc.)
       if (this.toolsCache) {
-
         return this.toolsCache;
       }
       return [];

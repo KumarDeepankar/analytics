@@ -91,10 +91,9 @@ async def show_oauth_config():
                 return JSONResponse(content={
                     "oauth_providers": providers,
                     "required_redirect_uris": [
-                        f"{TOOLS_GATEWAY_URL}/auth/callback-redirect",
-                        f"{TOOLS_GATEWAY_URL}/auth/callback"
+                        f"{TOOLS_GATEWAY_URL}/auth/callback/"
                     ],
-                    "instructions": "Add these redirect URIs to your OAuth provider configuration"
+                    "instructions": "Add this redirect URI to your OAuth provider configuration (note the trailing slash)"
                 })
     except Exception as e:
         return JSONResponse(

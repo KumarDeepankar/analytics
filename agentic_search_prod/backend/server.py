@@ -39,7 +39,7 @@ from pydantic import BaseModel
 from langgraph.types import Command, StateSnapshot
 
 from ollama_query_agent.graph_definition import compiled_agent as search_compiled_agent
-from ollama_query_agent.mcp_tool_client import mcp_tool_client
+from ollama_query_agent.mcp_tool_client import mcp_tool_client, set_request_jwt_token, reset_request_jwt_token, GatewayAuthError
 from ollama_query_agent.error_handler import format_error_for_display
 from ollama_query_agent.model_config import (
     get_available_providers,
@@ -54,12 +54,29 @@ from auth import (
     get_current_user,
     require_auth,
     get_jwt_token,
-    fetch_jwks_from_gateway
+    fetch_jwks_from_gateway,
+    invalidate_session_by_email,
+    pending_logouts,
+    check_and_clear_pending_logout
 )
 from auth_routes import router as auth_router
 from debug_auth import router as debug_auth_router
 from conversation_routes import router as conversation_router
 from conversation_store import get_preferences
+
+
+async def with_jwt_context(jwt_token: Optional[str], async_gen: AsyncGenerator[str, None]) -> AsyncGenerator[str, None]:
+    """Wrap an async generator to maintain JWT context throughout streaming.
+
+    Since contextvars don't automatically propagate into async generators returned by
+    StreamingResponse, this wrapper sets the JWT context before each yield.
+    """
+    reset_token = set_request_jwt_token(jwt_token)
+    try:
+        async for item in async_gen:
+            yield item
+    finally:
+        reset_request_jwt_token(reset_token)
 
 
 # Modern FastAPI lifespan event handler (replaces deprecated on_event)
@@ -147,53 +164,154 @@ app.add_middleware(
 @app.get("/tools")
 async def get_available_tools(request: Request):
     """Get available tools from MCP registry (requires authentication)"""
-    # Require authentication
     user = require_auth(request)
+    jwt_token = get_jwt_token(request)
+    reset_token = set_request_jwt_token(jwt_token)
 
     try:
-        # Get JWT token and set it in MCP client
-        jwt_token = get_jwt_token(request)
-        if jwt_token:
-            mcp_tool_client.set_jwt_token(jwt_token)
-
-        # Fetch tools (will be filtered by gateway based on user's roles)
         tools = await mcp_tool_client.get_available_tools()
-
         return JSONResponse(content={
             "tools": tools,
-            "user": {
-                "email": user.get("email"),
-                "authenticated": True
-            }
+            "user": {"email": user.get("email"), "authenticated": True}
         })
+    except GatewayAuthError as e:
+        # User deleted/disabled from gateway - invalidate local session
+        invalidate_session_by_email(e.user_email)
+        raise HTTPException(status_code=401, detail="Session invalidated - user removed from gateway")
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error fetching tools: {str(e)}")
+    finally:
+        reset_request_jwt_token(reset_token)
 
 
 @app.post("/tools/refresh")
 async def refresh_tools_cache(request: Request):
-    """Invalidate tools cache to force fresh fetch from MCP registry (requires authentication)"""
-    # Require authentication
+    """Refresh tools - now a no-op since client is stateless"""
     user = require_auth(request)
+    return JSONResponse(content={
+        "success": True,
+        "message": "Tools fetched fresh on each request. No cache to invalidate.",
+        "user": {"email": user.get("email")}
+    })
 
+
+@app.get("/auth/validate")
+async def validate_session(request: Request):
+    """
+    Validate session against gateway. Frontend should call this periodically.
+    Returns 401 if user deleted/disabled from gateway.
+    """
+    user = get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    jwt_token = get_jwt_token(request)
+    if not jwt_token:
+        raise HTTPException(status_code=401, detail="No token")
+
+    reset_token = set_request_jwt_token(jwt_token)
     try:
-        # Invalidate the tools cache
-        mcp_tool_client.invalidate_tools_cache()
+        # Quick validation - try to list tools from gateway
+        tools = await mcp_tool_client.get_available_tools()
+        return JSONResponse(content={"valid": True, "email": user.get("email")})
+    except GatewayAuthError as e:
+        invalidate_session_by_email(e.user_email)
+        raise HTTPException(status_code=401, detail="User removed from gateway")
+    except Exception:
+        # Gateway unreachable - don't invalidate, might be temporary
+        return JSONResponse(content={"valid": True, "email": user.get("email"), "warning": "Gateway check failed"})
+    finally:
+        reset_request_jwt_token(reset_token)
 
-        return JSONResponse(content={
-            "success": True,
-            "message": "Tools cache invalidated successfully",
-            "user": {
-                "email": user.get("email"),
-                "authenticated": True
-            }
-        })
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error invalidating tools cache: {str(e)}")
+
+@app.get("/auth/session-events")
+async def session_events(request: Request):
+    """
+    SSE endpoint for real-time session events.
+    Frontend subscribes to this to receive immediate logout notifications
+    when user is deleted from tools_gateway.
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+
+    user = get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    user_email = user.get("email")
+
+    async def event_stream():
+        """Generate SSE events for session status."""
+        try:
+            while True:
+                # Check if this user has a pending logout
+                if user_email in pending_logouts:
+                    check_and_clear_pending_logout(user_email)
+                    logger.info(f"SSE: Sending logout event to {user_email}")
+                    yield f"event: logout\ndata: {{\"reason\": \"User deleted from gateway\"}}\n\n"
+                    break
+
+                # Send heartbeat every 15 seconds to keep connection alive
+                yield f"event: heartbeat\ndata: {{\"status\": \"ok\"}}\n\n"
+                await asyncio.sleep(15)
+        except asyncio.CancelledError:
+            logger.info(f"SSE: Connection closed for {user_email}")
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no"
+        }
+    )
+
+
+class UserDeletedPayload(BaseModel):
+    """Payload for user deletion webhook from tools_gateway"""
+    email: str
+    user_id: Optional[str] = None
+
+
+@app.post("/internal/user-deleted")
+async def handle_user_deleted(request: Request, payload: UserDeletedPayload):
+    """
+    Webhook endpoint called by tools_gateway when a user is deleted.
+    Immediately invalidates the user's session in this service.
+
+    Security: Only accepts requests from tools_gateway (validated via shared secret).
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+
+    logger.info(f"🔔 Received user deletion webhook for: {payload.email}")
+
+    # Validate the request is from tools_gateway
+    # Check for internal webhook secret
+    webhook_secret = os.getenv("INTERNAL_WEBHOOK_SECRET")
+    if webhook_secret:
+        provided_secret = request.headers.get("X-Webhook-Secret")
+        if provided_secret != webhook_secret:
+            logger.warning(f"❌ Invalid webhook secret for user deletion: {payload.email}")
+            raise HTTPException(status_code=403, detail="Invalid webhook secret")
+
+    # Invalidate user's session
+    invalidated = invalidate_session_by_email(payload.email)
+
+    if invalidated:
+        logger.info(f"✅ User session invalidated via webhook: {payload.email}")
+        logger.info(f"✅ User added to pending_logouts for SSE notification")
+    else:
+        logger.warning(f"⚠️ No active session found for deleted user: {payload.email}")
+
+    return JSONResponse(content={
+        "success": True,
+        "email": payload.email,
+        "session_invalidated": invalidated
+    })
 
 
 @app.get("/models")
@@ -442,10 +560,8 @@ async def search_endpoint(request_body: SearchRequest, http_request: Request):
     # Require authentication
     user = require_auth(http_request)
 
-    # Get JWT token and set it in MCP client
+    # Get JWT token for per-user tool access (will be set in context by wrapper)
     jwt_token = get_jwt_token(http_request)
-    if jwt_token:
-        mcp_tool_client.set_jwt_token(jwt_token)
 
     effective_session_id = request_body.session_id if request_body.session_id else f"search-{str(uuid.uuid4())}"
 
@@ -458,18 +574,22 @@ async def search_endpoint(request_body: SearchRequest, http_request: Request):
     if request_body.conversation_history:
         conv_history = [{"query": turn.query, "response": turn.response} for turn in request_body.conversation_history]
 
+    # Wrap the stream with JWT context to maintain per-user tool access
     return StreamingResponse(
-        search_interaction_stream(
-            effective_session_id,
-            request_body.query,
-            request_body.enabled_tools or [],
-            request_body.is_followup or False,
-            conv_history,
-            request_body.theme,
-            request_body.theme_strategy or "auto",
-            request_body.llm_provider,
-            request_body.llm_model,
-            user_preferences
+        with_jwt_context(
+            jwt_token,
+            search_interaction_stream(
+                effective_session_id,
+                request_body.query,
+                request_body.enabled_tools or [],
+                request_body.is_followup or False,
+                conv_history,
+                request_body.theme,
+                request_body.theme_strategy or "auto",
+                request_body.llm_provider,
+                request_body.llm_model,
+                user_preferences
+            )
         ),
         media_type="text/plain"
     )
@@ -486,10 +606,8 @@ async def chat_endpoint(
     # Require authentication
     user = require_auth(request)
 
-    # Get JWT token and set it in MCP client
+    # Get JWT token for per-user tool access (will be set in context by wrapper)
     jwt_token = get_jwt_token(request)
-    if jwt_token:
-        mcp_tool_client.set_jwt_token(jwt_token)
 
     effective_session_id = session_id if session_id else f"search-{str(uuid.uuid4())}"
 
@@ -498,8 +616,12 @@ async def chat_endpoint(
     if enabled_tools:
         enabled_tools_list = [tool.strip() for tool in enabled_tools.split(",")]
 
+    # Wrap the stream with JWT context to maintain per-user tool access
     return StreamingResponse(
-        search_interaction_stream(effective_session_id, human_message, enabled_tools_list),
+        with_jwt_context(
+            jwt_token,
+            search_interaction_stream(effective_session_id, human_message, enabled_tools_list)
+        ),
         media_type="text/plain"
     )
 

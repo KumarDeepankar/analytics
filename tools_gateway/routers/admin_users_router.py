@@ -3,6 +3,8 @@ Admin Users & Roles Router
 Handles user management, role management, and role-tool permissions
 """
 import logging
+import os
+import httpx
 from typing import Dict, Any
 
 from fastapi import APIRouter, Request, HTTPException
@@ -16,6 +18,47 @@ from tools_gateway import discovery_service
 from tools_gateway import mcp_storage_manager
 
 logger = logging.getLogger(__name__)
+
+
+async def notify_portal_user_deleted(user_email: str, user_id: str) -> bool:
+    """
+    Notify agentic_search_prod that a user has been deleted.
+    This triggers immediate session invalidation in the portal.
+
+    Returns True if notification succeeded, False otherwise.
+    """
+    portal_url = os.getenv("AGENTIC_SEARCH_URL", "http://localhost:8023")
+    webhook_secret = os.getenv("INTERNAL_WEBHOOK_SECRET")
+
+    logger.info(f"🔔 Attempting to notify portal of user deletion: {user_email}")
+    logger.info(f"🔔 AGENTIC_SEARCH_URL = {portal_url}")
+
+    if not portal_url:
+        logger.error("❌ AGENTIC_SEARCH_URL not configured - cannot notify portal of user deletion!")
+        logger.error("❌ Set AGENTIC_SEARCH_URL env var (e.g., http://localhost:8023) to enable logout sync")
+        return False
+
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            headers = {"Content-Type": "application/json"}
+            if webhook_secret:
+                headers["X-Webhook-Secret"] = webhook_secret
+
+            response = await client.post(
+                f"{portal_url}/internal/user-deleted",
+                json={"email": user_email, "user_id": user_id},
+                headers=headers
+            )
+
+            if response.status_code == 200:
+                logger.info(f"Portal notified of user deletion: {user_email}")
+                return True
+            else:
+                logger.warning(f"Portal notification failed: {response.status_code} - {response.text}")
+                return False
+    except Exception as e:
+        logger.error(f"Failed to notify portal of user deletion: {e}")
+        return False
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -317,6 +360,9 @@ async def delete_user(request: Request, user_id: str):
             "deleted_user_name": user_to_delete.name
         }
     )
+
+    # Notify agentic_search_prod to invalidate user's session immediately
+    await notify_portal_user_deleted(user_to_delete.email, user_id)
 
     return JSONResponse(content={"success": True, "message": "User deleted successfully"})
 

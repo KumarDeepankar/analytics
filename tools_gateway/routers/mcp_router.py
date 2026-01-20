@@ -253,12 +253,24 @@ async def mcp_post_endpoint(
             logger.info("tools/list: Fetching from discovery service.")
             all_tools = await discovery_service.get_all_tools()
 
-            # Get current user from JWT token (optional - allows both authenticated and anonymous access)
+            # Check if Authorization header is present (token was provided)
+            auth_header = request.headers.get("Authorization")
+            has_token = auth_header and auth_header.startswith("Bearer ")
+
+            # Get current user from JWT token
             user = get_current_user(request)
+
+            if has_token and not user:
+                # SECURITY: Token was provided but user lookup failed
+                # This means: invalid token, expired token, or user was deleted/disabled
+                # Must reject with 401 - NOT fall through to anonymous access
+                logger.warning(f"tools/list: Token provided but user lookup failed - rejecting with 401")
+                raise HTTPException(status_code=401, detail="Authentication failed - invalid token or user not found")
 
             if user:
                 # AUTHENTICATED ACCESS: Filter tools based on user's role permissions
-                logger.info(f"tools/list: Filtering tools for user {user.email} with roles {user.roles}")
+                logger.info(f"tools/list: Filtering tools for user {user.email} (user_id={user.user_id}) with roles {user.roles}")
+                logger.info(f"tools/list: DEBUG - 'admin' in roles: {'admin' in user.roles}")
                 allowed_tools = []
 
                 for tool in all_tools:
@@ -300,8 +312,8 @@ async def mcp_post_endpoint(
                     }
                 })
             else:
-                # UNAUTHENTICATED ACCESS: Return all tools (or implement your policy)
-                logger.warning(f"tools/list: Anonymous access - returning all {len(all_tools)} tools")
+                # TRUE ANONYMOUS ACCESS: No token provided at all
+                logger.warning(f"tools/list: Anonymous access (no token) - returning all {len(all_tools)} tools")
 
                 # DEBUG: Log tool details
                 for tool in all_tools:
@@ -355,8 +367,24 @@ async def mcp_post_endpoint(
                 logger.warning(f"Failed to fetch tool metadata for {tool_name}: {e} - will skip auth/authz checks")
 
             # === AUTHORIZATION CHECK ===
+            # Check if Authorization header is present (token was provided)
+            auth_header = request.headers.get("Authorization")
+            has_token = auth_header and auth_header.startswith("Bearer ")
+
             # Get current user from JWT token
             user = get_current_user(request)
+
+            if has_token and not user:
+                # SECURITY: Token was provided but user lookup failed
+                # This means: invalid token, expired token, or user was deleted/disabled
+                # Must reject with 401 - NOT fall through to anonymous access
+                logger.warning(f"tools/call: Token provided but user lookup failed - rejecting with 401")
+                error_response = mcp_gateway.create_error_response(
+                    request_id,
+                    -32001,
+                    "Authentication failed - invalid token or user not found"
+                )
+                return JSONResponse(content=error_response, status_code=401)
 
             if user and tool_metadata:
                 # AUTHENTICATED: Check if user has permission to execute this tool
@@ -422,9 +450,9 @@ async def mcp_post_endpoint(
                         "server_url": server_url
                     }
                 )
-            else:
-                # UNAUTHENTICATED ACCESS: Allow anonymous tool execution
-                logger.warning(f"tools/call: Anonymous execution of tool {tool_name} (consider requiring auth)")
+            elif not has_token:
+                # TRUE ANONYMOUS ACCESS: No token provided at all
+                logger.warning(f"tools/call: Anonymous execution of tool {tool_name} (no token provided)")
 
             # === END AUTHORIZATION CHECK ===
 

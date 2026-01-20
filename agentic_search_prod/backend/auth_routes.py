@@ -352,8 +352,8 @@ async def login_page():
                     Sign in with credentials
                 </div>
 
-                <!-- Error Message -->
-                <div class="alert alert-danger" id="localLoginError"></div>
+                <!-- Error Message (for login errors and OAuth errors) -->
+                <div class="alert alert-danger" id="loginError"></div>
 
                 <!-- Login Form -->
                 <form id="localLoginForm" onsubmit="return handleLocalLogin(event);">
@@ -388,10 +388,41 @@ async def login_page():
         let oauthProviders = [];
         let isSubmitting = false;
 
-        // Load OAuth providers on page load
+        // Load OAuth providers on page load and check for errors
         document.addEventListener('DOMContentLoaded', function() {
+            checkForErrors();
             loadOAuthProviders();
         });
+
+        /**
+         * Check URL for error parameters and display them
+         */
+        function checkForErrors() {
+            const urlParams = new URLSearchParams(window.location.search);
+            const error = urlParams.get('error');
+            const message = urlParams.get('message');
+
+            if (error || message) {
+                const errorDiv = document.getElementById('loginError');
+                let errorText = '';
+
+                if (error === 'access_denied') {
+                    errorText = '🚫 Authentication Failed! ';
+                }
+
+                if (message) {
+                    errorText += decodeURIComponent(message);
+                } else if (error) {
+                    errorText += error.replace(/_/g, ' ');
+                }
+
+                errorDiv.innerHTML = errorText;
+                errorDiv.style.display = 'block';
+
+                // Clean up URL
+                window.history.replaceState({}, document.title, window.location.pathname);
+            }
+        }
 
         /**
          * Load available OAuth providers
@@ -461,7 +492,7 @@ async def login_page():
 
             const email = document.getElementById('localEmail').value;
             const password = document.getElementById('localPassword').value;
-            const errorDiv = document.getElementById('localLoginError');
+            const errorDiv = document.getElementById('loginError');
             const loginButton = document.getElementById('loginButton');
 
             // Show loading state
@@ -539,12 +570,38 @@ async def oauth_login(provider_id: str):
 
 
 @router.get("/callback")
-async def oauth_callback(token: str, response: Response):
+async def oauth_callback(
+    response: Response,
+    token: Optional[str] = None,
+    error: Optional[str] = None,
+    message: Optional[str] = None
+):
     """
     OAuth callback after successful authentication.
     Receives JWT token from tools_gateway and creates session.
+    Also handles error redirects (e.g., access denied due to no role mapping).
     """
+    logger.info(f"OAuth callback received - token: {bool(token)}, error: {error}, message: {message}")
+
     try:
+        # Check for error redirect (e.g., no role mapping)
+        if error:
+            logger.warning(f"OAuth callback received error: {error}, message: {message}")
+            # Redirect to login page with error parameters
+            # URL-encode the message since FastAPI decoded it
+            from urllib.parse import quote
+            error_url = f"/auth/login?error={error}"
+            if message:
+                encoded_message = quote(message, safe='')
+                error_url += f"&message={encoded_message}"
+            logger.info(f"Redirecting to login page with error: {error_url}")
+            return RedirectResponse(url=error_url, status_code=302)
+
+        # Token is required for successful auth
+        if not token:
+            logger.error("No token provided in OAuth callback")
+            raise HTTPException(status_code=400, detail="Authentication token required")
+
         # Validate the JWT token
         payload = validate_jwt(token)
         if not payload:

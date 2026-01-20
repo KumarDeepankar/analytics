@@ -40,7 +40,8 @@ from .routers import (
     mcp_router,
     management_router,
     config_router,
-    sse_router
+    sse_router,
+    oauth_groups_router
 )
 
 # Configure logging per MCP 2025-06-18 specification
@@ -163,6 +164,9 @@ app.include_router(admin_tools_router)
 
 # Active Directory Integration
 app.include_router(ad_router)
+
+# OAuth Group Mappings
+app.include_router(oauth_groups_router)
 
 # Audit & Security
 app.include_router(audit_router)

@@ -72,6 +72,7 @@ function setupEventListeners() {
         usersTab.addEventListener('click', () => {
             loadADConfig();
             loadADMappings();
+            loadOAuthGroupMappings();  // Load OAuth group mappings
             loadUsers();
             loadRoles();  // Also load roles since they're in the same tab
         });
@@ -3150,3 +3151,284 @@ async function showAdminGeneratedTokenModal(userId, userEmail, userName) {
 
 // Export to global scope
 window.showAdminGeneratedTokenModal = showAdminGeneratedTokenModal;
+
+// =====================================================================
+// OAUTH GROUP MAPPINGS
+// =====================================================================
+
+/**
+ * Load OAuth Group Mappings
+ * Fetches all OAuth group-to-role mappings from the server
+ */
+async function loadOAuthGroupMappings() {
+    const container = document.getElementById('oauthGroupMappingsContainer');
+
+    // Check if user is authenticated
+    if (!authToken) {
+        container.innerHTML = '<p class="text-muted">Sign in to view OAuth group mappings.</p>';
+        return;
+    }
+
+    try {
+        const response = await fetch('/admin/oauth-groups/mappings', {
+            headers: {
+                'Authorization': `Bearer ${authToken}`
+            }
+        });
+
+        if (response.ok) {
+            const data = await response.json();
+            displayOAuthGroupMappings(data.mappings);
+        } else if (response.status === 403 || response.status === 401) {
+            container.innerHTML = '<p class="text-muted">You don\'t have permission to view OAuth group mappings.</p>';
+        } else {
+            container.innerHTML = '<p class="text-muted">No OAuth group mappings configured.</p>';
+        }
+    } catch (error) {
+        console.error('Error loading OAuth group mappings:', error);
+        container.innerHTML = '<p class="text-muted">No OAuth group mappings configured. Add mappings to automatically assign roles based on OAuth provider groups.</p>';
+    }
+}
+
+/**
+ * Display OAuth Group Mappings
+ * Renders the mappings table
+ */
+function displayOAuthGroupMappings(mappings) {
+    const container = document.getElementById('oauthGroupMappingsContainer');
+
+    if (!mappings || mappings.length === 0) {
+        container.innerHTML = '<p class="text-muted">No OAuth group mappings configured. Add mappings to automatically assign roles based on OAuth provider groups.</p>';
+        return;
+    }
+
+    container.innerHTML = `
+        <table class="admin-table">
+            <thead>
+                <tr>
+                    <th>Provider</th>
+                    <th>Group Identifier</th>
+                    <th>Mapped Role</th>
+                    <th>Created</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                ${mappings.map(m => `
+                    <tr>
+                        <td><span class="badge" style="text-transform: none;">${m.provider_name || m.provider_id}</span></td>
+                        <td><code style="font-size: 11px;">${m.group_identifier}</code></td>
+                        <td><span class="badge badge-primary" style="text-transform: none;">${m.role_name || m.role_id}</span></td>
+                        <td>${m.created_at ? new Date(m.created_at).toLocaleString() : 'N/A'}</td>
+                        <td>
+                            <button class="btn btn-sm btn-danger" onclick="deleteOAuthGroupMapping('${m.mapping_id}')" title="Remove this mapping">
+                                <i class="fas fa-trash"></i> Remove
+                            </button>
+                        </td>
+                    </tr>
+                `).join('')}
+            </tbody>
+        </table>
+    `;
+}
+
+/**
+ * Show Add OAuth Group Mapping Modal
+ * Opens the modal for creating a new mapping
+ */
+async function showAddOAuthGroupMappingModal() {
+    const modal = document.getElementById('addOAuthGroupMappingModal');
+    if (!modal) {
+        showNotification('Modal not found', 'error');
+        return;
+    }
+
+    // Clear form
+    document.getElementById('addOAuthGroupMappingForm').reset();
+
+    // Load OAuth providers for dropdown
+    try {
+        const providersResponse = await fetch('/admin/oauth-groups/providers', {
+            headers: {
+                'Authorization': `Bearer ${authToken}`
+            }
+        });
+
+        if (providersResponse.ok) {
+            const providersData = await providersResponse.json();
+            const providerSelect = document.getElementById('oauthGroupMappingProvider');
+            providerSelect.innerHTML = '<option value="">Select a provider...</option>';
+
+            for (const provider of providersData.providers) {
+                if (provider.enabled) {
+                    providerSelect.innerHTML += `<option value="${provider.provider_id}">${provider.provider_name}</option>`;
+                }
+            }
+        }
+    } catch (error) {
+        console.error('Error loading OAuth providers:', error);
+        showNotification('Failed to load OAuth providers', 'error');
+    }
+
+    // Load roles for dropdown
+    try {
+        const rolesResponse = await fetch('/admin/roles', {
+            headers: {
+                'Authorization': `Bearer ${authToken}`
+            }
+        });
+
+        if (rolesResponse.ok) {
+            const rolesData = await rolesResponse.json();
+            const roleSelect = document.getElementById('oauthGroupMappingRole');
+            roleSelect.innerHTML = '<option value="">Select a role...</option>';
+
+            for (const role of rolesData.roles) {
+                roleSelect.innerHTML += `<option value="${role.role_id}">${role.role_name}</option>`;
+            }
+        }
+    } catch (error) {
+        console.error('Error loading roles:', error);
+        showNotification('Failed to load roles', 'error');
+    }
+
+    // Show modal
+    modal.style.display = 'flex';
+}
+
+/**
+ * Save OAuth Group Mapping
+ * Creates a new OAuth group-to-role mapping
+ */
+async function saveOAuthGroupMapping() {
+    const providerId = document.getElementById('oauthGroupMappingProvider').value;
+    const groupIdentifier = document.getElementById('oauthGroupMappingGroupId').value.trim();
+    const roleId = document.getElementById('oauthGroupMappingRole').value;
+
+    // Validate fields
+    if (!providerId) {
+        showNotification('Please select an OAuth provider', 'error');
+        return;
+    }
+    if (!groupIdentifier) {
+        showNotification('Please enter a group identifier', 'error');
+        return;
+    }
+    if (!roleId) {
+        showNotification('Please select a role', 'error');
+        return;
+    }
+
+    try {
+        const response = await fetch('/admin/oauth-groups/mappings', {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${authToken}`,
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                provider_id: providerId,
+                group_identifier: groupIdentifier,
+                role_id: roleId
+            })
+        });
+
+        if (response.ok) {
+            const data = await response.json();
+            showNotification(data.message || 'OAuth group mapping created successfully', 'success');
+            closeModal('addOAuthGroupMappingModal');
+            loadOAuthGroupMappings(); // Refresh the list
+        } else {
+            const error = await response.json();
+            showNotification('Failed to create mapping: ' + (error.detail || 'Unknown error'), 'error');
+        }
+    } catch (error) {
+        console.error('Error saving OAuth group mapping:', error);
+        showNotification('Error saving mapping: ' + error.message, 'error');
+    }
+}
+
+/**
+ * Delete OAuth Group Mapping
+ * Removes an existing OAuth group-to-role mapping
+ */
+async function deleteOAuthGroupMapping(mappingId) {
+    if (!confirm('Are you sure you want to remove this OAuth group mapping?')) {
+        return;
+    }
+
+    try {
+        const response = await fetch(`/admin/oauth-groups/mappings/${mappingId}`, {
+            method: 'DELETE',
+            headers: {
+                'Authorization': `Bearer ${authToken}`
+            }
+        });
+
+        if (response.ok) {
+            showNotification('OAuth group mapping removed successfully', 'success');
+            loadOAuthGroupMappings(); // Refresh the list
+        } else {
+            const error = await response.json();
+            showNotification('Failed to remove mapping: ' + (error.detail || 'Unknown error'), 'error');
+        }
+    } catch (error) {
+        console.error('Error deleting OAuth group mapping:', error);
+        showNotification('Error removing mapping: ' + error.message, 'error');
+    }
+}
+
+/**
+ * Sync OAuth User Roles
+ * Re-applies group mappings to all existing OAuth users
+ */
+async function syncOAuthUserRoles() {
+    if (!confirm('This will re-sync roles for ALL OAuth users based on current group mappings.\n\nUsers without matching mappings will have their roles cleared.\n\nContinue?')) {
+        return;
+    }
+
+    try {
+        showNotification('Syncing roles for OAuth users...', 'info');
+
+        const response = await fetch('/admin/oauth-groups/sync-roles', {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${authToken}`,
+                'Content-Type': 'application/json'
+            }
+        });
+
+        if (response.ok) {
+            const data = await response.json();
+
+            // Build detailed message
+            let message = `Synced ${data.synced} of ${data.total_oauth_users} OAuth users.`;
+            if (data.skipped > 0) {
+                message += ` (${data.skipped} skipped - no changes needed)`;
+            }
+
+            showNotification(message, 'success');
+
+            // Show detailed results in console
+            console.log('Sync results:', data.results);
+
+            // Refresh users list to show updated roles
+            if (typeof loadUsers === 'function') {
+                loadUsers();
+            }
+        } else {
+            const error = await response.json();
+            showNotification('Failed to sync roles: ' + (error.detail || 'Unknown error'), 'error');
+        }
+    } catch (error) {
+        console.error('Error syncing OAuth user roles:', error);
+        showNotification('Error syncing roles: ' + error.message, 'error');
+    }
+}
+
+// Export OAuth group mapping functions to global scope
+window.loadOAuthGroupMappings = loadOAuthGroupMappings;
+window.showAddOAuthGroupMappingModal = showAddOAuthGroupMappingModal;
+window.saveOAuthGroupMapping = saveOAuthGroupMapping;
+window.deleteOAuthGroupMapping = deleteOAuthGroupMapping;
+window.syncOAuthUserRoles = syncOAuthUserRoles;

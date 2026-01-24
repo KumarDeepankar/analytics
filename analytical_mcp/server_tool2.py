@@ -1114,9 +1114,28 @@ def _generate_chart_config(
     """
     Generate chart configuration from aggregation results.
 
+    Smart chart type selection:
+    - Pie/Doughnut: <= 5 categories with significant distribution
+    - Horizontal Bar: > 8 categories (easier to read)
+    - Stacked Bar: Multi-level group by fields
+    - Area: Time series data
+    - Bar: Default for categorical data
+
     For filter-only mode, uses auto_aggregations (server-side aggregations) for accurate counts.
     """
     charts = []
+
+    def select_chart_type(bucket_count: int, is_multi_level: bool = False, is_time_series: bool = False) -> str:
+        """Select optimal chart type based on data characteristics."""
+        if is_time_series:
+            return "area"  # Area charts work great for time series
+        if is_multi_level:
+            return "stackedBar"  # Stacked for multi-level grouping
+        if bucket_count <= 5:
+            return "doughnut"  # Doughnut for small category counts
+        if bucket_count > 8:
+            return "horizontalBar"  # Horizontal bar for many categories
+        return "bar"  # Default to vertical bar
 
     # Group by chart (top level only for multi-level)
     if group_by_fields and "group_by" in aggregations:
@@ -1124,28 +1143,31 @@ def _generate_chart_config(
         buckets = group_data.get("buckets", [])
         if buckets:
             field_name = group_by_fields[0]
+            is_multi_level = len(group_by_fields) > 1
             title_suffix = ""
-            if len(group_by_fields) > 1:
+            if is_multi_level:
                 title_suffix = f" (with {', '.join(group_by_fields[1:])} breakdown)"
 
+            chart_type = select_chart_type(len(buckets), is_multi_level=is_multi_level)
+
             charts.append({
-                "type": "bar",
+                "type": chart_type,
                 "title": f"Events by {field_name.replace('_', ' ').title()}{title_suffix}",
                 "labels": [str(b["key"]) for b in buckets],
                 "data": [b["count"] for b in buckets],
                 "aggregation_field": field_name,
-                "multi_level": len(group_by_fields) > 1,
+                "multi_level": is_multi_level,
                 "total_records": sum(b["count"] for b in buckets)
             })
 
-    # Date histogram chart
+    # Date histogram chart - use area for time series
     if date_histogram and "date_histogram" in aggregations:
         hist_data = aggregations["date_histogram"]
         buckets = hist_data.get("buckets", [])
         if buckets:
             interval = hist_data.get("interval", "month")
             charts.append({
-                "type": "line",
+                "type": "area",  # Area chart for time series
                 "title": f"Events Over Time (by {interval})",
                 "labels": [str(b["date"]) for b in buckets],
                 "data": [b["count"] for b in buckets],
@@ -1159,8 +1181,9 @@ def _generate_chart_config(
         for field, agg_data in auto_aggregations.items():
             buckets = agg_data.get("buckets", [])
             if buckets:
+                chart_type = select_chart_type(len(buckets))
                 charts.append({
-                    "type": "bar",
+                    "type": chart_type,
                     "title": f"Distribution by {field.replace('_', ' ').title()}",
                     "labels": [str(b["key"]) for b in buckets],
                     "data": [b["count"] for b in buckets],

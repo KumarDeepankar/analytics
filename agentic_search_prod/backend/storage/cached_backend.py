@@ -284,6 +284,124 @@ class CachedBackend(ConversationStorageBackend):
         self._synced_users.discard(user_email)
         logger.info(f"Cleared cache for user {user_email}")
 
+    # =========================================================================
+    # SHARING / COLLABORATION (delegated to permanent backend)
+    # =========================================================================
+
+    def share_conversation(
+        self,
+        conversation_id: str,
+        owner_email: str,
+        shared_with_email: str,
+        message: Optional[str] = None
+    ) -> bool:
+        """Share conversation - save to both cache and permanent."""
+        # Save to permanent first (source of truth)
+        permanent_success = self.permanent.share_conversation(
+            conversation_id, owner_email, shared_with_email, message
+        )
+        # Also save to cache for fast reads
+        self.cache.share_conversation(
+            conversation_id, owner_email, shared_with_email, message
+        )
+        return permanent_success
+
+    def get_shared_with_me(
+        self,
+        user_email: str,
+        limit: int = 50
+    ) -> List[Dict[str, Any]]:
+        """Get shared conversations - try cache first, fallback to permanent."""
+        # Try permanent first for sharing (more reliable)
+        result = self.permanent.get_shared_with_me(user_email, limit)
+        if result:
+            return result
+        return self.cache.get_shared_with_me(user_email, limit)
+
+    def get_conversation_shares(
+        self,
+        conversation_id: str,
+        owner_email: str
+    ) -> List[Dict[str, Any]]:
+        """Get shares for a conversation."""
+        # Try permanent first
+        result = self.permanent.get_conversation_shares(conversation_id, owner_email)
+        if result:
+            return result
+        return self.cache.get_conversation_shares(conversation_id, owner_email)
+
+    def remove_share(
+        self,
+        conversation_id: str,
+        owner_email: str,
+        shared_with_email: str
+    ) -> bool:
+        """Remove share from both cache and permanent."""
+        permanent_success = self.permanent.remove_share(
+            conversation_id, owner_email, shared_with_email
+        )
+        self.cache.remove_share(conversation_id, owner_email, shared_with_email)
+        return permanent_success
+
+    def mark_share_viewed(
+        self,
+        conversation_id: str,
+        user_email: str
+    ) -> bool:
+        """Mark share as viewed in both cache and permanent."""
+        permanent_success = self.permanent.mark_share_viewed(conversation_id, user_email)
+        self.cache.mark_share_viewed(conversation_id, user_email)
+        return permanent_success
+
+    def get_unviewed_share_count(
+        self,
+        user_email: str
+    ) -> int:
+        """Get unviewed share count from permanent backend."""
+        return self.permanent.get_unviewed_share_count(user_email)
+
+    def get_shared_conversation(
+        self,
+        conversation_id: str,
+        user_email: str
+    ) -> Optional[Dict[str, Any]]:
+        """Get shared conversation from permanent backend."""
+        return self.permanent.get_shared_conversation(conversation_id, user_email)
+
+    # =========================================================================
+    # DISCUSSION / COMMENTS (delegated to permanent backend)
+    # =========================================================================
+
+    def add_discussion_comment(
+        self,
+        message_id: str,
+        conversation_id: str,
+        user_email: str,
+        user_name: str,
+        comment: str
+    ) -> Optional[Dict[str, Any]]:
+        """Add discussion comment to both cache and permanent."""
+        # Save to permanent first (source of truth)
+        result = self.permanent.add_discussion_comment(
+            message_id, conversation_id, user_email, user_name, comment
+        )
+        # Also save to cache
+        self.cache.add_discussion_comment(
+            message_id, conversation_id, user_email, user_name, comment
+        )
+        return result
+
+    def get_discussion_comments(
+        self,
+        message_id: str,
+        conversation_id: str
+    ) -> List[Dict[str, Any]]:
+        """Get discussion comments - try permanent first."""
+        result = self.permanent.get_discussion_comments(message_id, conversation_id)
+        if result:
+            return result
+        return self.cache.get_discussion_comments(message_id, conversation_id)
+
 
 def create_cached_backend(
     permanent_type: str = "dynamodb",

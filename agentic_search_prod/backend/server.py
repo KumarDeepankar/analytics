@@ -11,7 +11,7 @@ import os
 # - Reduces latency by ~200-500ms per query (after first query)
 os.environ.setdefault("MCP_TOOLS_CACHE_TTL", "300")
 
-# MCP Session Pool TTL (Priority 2 Optimization)
+# MCP Session  Pool TTL (Priority 2 Optimization)
 # - Reuses MCP sessions across tool calls
 # - Default: 600 seconds (10 minutes)
 # - Reduces latency by ~300-800ms per tool call (after first call)
@@ -62,6 +62,7 @@ from auth import (
 from auth_routes import router as auth_router
 from debug_auth import router as debug_auth_router
 from conversation_routes import router as conversation_router
+from research_agent.routes import router as research_router
 from conversation_store import get_preferences
 
 
@@ -77,6 +78,10 @@ async def with_jwt_context(jwt_token: Optional[str], async_gen: AsyncGenerator[s
             yield item
     finally:
         reset_request_jwt_token(reset_token)
+
+
+# Track active SSE connections for graceful shutdown
+active_sse_connections: set = set()
 
 
 # Modern FastAPI lifespan event handler (replaces deprecated on_event)
@@ -108,8 +113,35 @@ async def lifespan(app: FastAPI):
 
     yield  # Server runs here
 
-    # Shutdown logic (if needed in future)
+    # Shutdown logic - close all resources
     logger.info("Shutting down Agentic Search Service...")
+
+    # Cancel all active SSE connections
+    if active_sse_connections:
+        logger.info(f"Cancelling {len(active_sse_connections)} active SSE connections...")
+        for task in active_sse_connections:
+            task.cancel()
+        # Wait briefly for cancellations
+        await asyncio.sleep(0.1)
+
+    # Close research agent's cached LLM clients (httpx connections)
+    logger.info("Closing research agent LLM clients...")
+    try:
+        from research_agent.nodes import cleanup_llm_clients
+        await cleanup_llm_clients()
+        logger.info("✓ Research agent LLM clients closed")
+    except Exception as e:
+        logger.warning(f"Error closing research agent clients: {e}")
+
+    # Close MCP tool client's HTTP connection pool
+    logger.info("Closing MCP tool client connections...")
+    try:
+        await mcp_tool_client.close()
+        logger.info("✓ MCP tool client closed")
+    except Exception as e:
+        logger.warning(f"Error closing MCP client: {e}")
+
+    logger.info("✓ Shutdown complete")
 
 
 app = FastAPI(
@@ -123,6 +155,7 @@ app = FastAPI(
 app.include_router(auth_router)
 app.include_router(debug_auth_router)
 app.include_router(conversation_router)
+app.include_router(research_router)
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 STATIC_DIR = os.path.join(BASE_DIR, "static")
@@ -244,8 +277,17 @@ async def session_events(request: Request):
 
     async def event_stream():
         """Generate SSE events for session status."""
+        # Track this connection for graceful shutdown
+        current_task = asyncio.current_task()
+        active_sse_connections.add(current_task)
+
         try:
             while True:
+                # Check if client disconnected
+                if await request.is_disconnected():
+                    logger.info(f"SSE: Client disconnected for {user_email}")
+                    break
+
                 # Check if this user has a pending logout
                 if user_email in pending_logouts:
                     check_and_clear_pending_logout(user_email)
@@ -257,7 +299,12 @@ async def session_events(request: Request):
                 yield f"event: heartbeat\ndata: {{\"status\": \"ok\"}}\n\n"
                 await asyncio.sleep(15)
         except asyncio.CancelledError:
-            logger.info(f"SSE: Connection closed for {user_email}")
+            logger.info(f"SSE: Connection cancelled for {user_email}")
+        except Exception as e:
+            logger.warning(f"SSE: Error for {user_email}: {e}")
+        finally:
+            # Remove from active connections
+            active_sse_connections.discard(current_task)
 
     return StreamingResponse(
         event_stream(),
@@ -645,4 +692,13 @@ if __name__ == "__main__":
     print("   • MCP Gateway: http://localhost:8021")
     print("=" * 60)
 
-    uvicorn.run(app, host=host, port=port)
+    # Configure uvicorn with fast graceful shutdown (1 second timeout)
+    # This prevents hanging when httpx keeps connections in pool
+    config = uvicorn.Config(
+        app,
+        host=host,
+        port=port,
+        timeout_graceful_shutdown=1  # Wait max 1 second for connections to close
+    )
+    server = uvicorn.Server(config)
+    server.run()

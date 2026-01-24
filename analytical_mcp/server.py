@@ -72,6 +72,7 @@ mcp = FastMCP("Analytical Events Server")
 # ============================================================================
 
 async def opensearch_request(method: str, path: str, body: Optional[dict] = None) -> dict:
+    print("request made--------------!!!!!!!!!!!!!!!")
     """Make async HTTP request to OpenSearch with basic authentication."""
     url = f"{OPENSEARCH_URL}/{path}"
     auth = aiohttp.BasicAuth(OPENSEARCH_USERNAME, OPENSEARCH_PASSWORD)

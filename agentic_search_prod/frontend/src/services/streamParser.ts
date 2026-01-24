@@ -155,6 +155,57 @@ export class StreamParser {
             timestamp: Date.now(),
           });
           markerFound = true;
+        }
+        // Deep Research markers (line-based)
+        else if (line && line.startsWith(StreamMarkerType.RESEARCH_START)) {
+          results.push({
+            type: StreamMarkerType.RESEARCH_START,
+            content: line.substring(StreamMarkerType.RESEARCH_START.length).trim(),
+            timestamp: Date.now(),
+          });
+          markerFound = true;
+        } else if (line && line.startsWith(StreamMarkerType.PHASE)) {
+          results.push({
+            type: StreamMarkerType.PHASE,
+            content: line.substring(StreamMarkerType.PHASE.length).trim(),
+            timestamp: Date.now(),
+          });
+          markerFound = true;
+        } else if (line && line.startsWith(StreamMarkerType.PROGRESS)) {
+          results.push({
+            type: StreamMarkerType.PROGRESS,
+            content: line.substring(StreamMarkerType.PROGRESS.length).trim(),
+            timestamp: Date.now(),
+          });
+          markerFound = true;
+        } else if (line && line.startsWith(StreamMarkerType.FINDING)) {
+          results.push({
+            type: StreamMarkerType.FINDING,
+            content: line.substring(StreamMarkerType.FINDING.length).trim(),
+            timestamp: Date.now(),
+          });
+          markerFound = true;
+        } else if (line && line.startsWith(StreamMarkerType.INTERIM_INSIGHT)) {
+          results.push({
+            type: StreamMarkerType.INTERIM_INSIGHT,
+            content: line.substring(StreamMarkerType.INTERIM_INSIGHT.length).trim(),
+            timestamp: Date.now(),
+          });
+          markerFound = true;
+        } else if (line && line.startsWith(StreamMarkerType.KEY_FINDINGS)) {
+          results.push({
+            type: StreamMarkerType.KEY_FINDINGS,
+            content: line.substring(StreamMarkerType.KEY_FINDINGS.length).trim(),
+            timestamp: Date.now(),
+          });
+          markerFound = true;
+        } else if (line && line.startsWith(StreamMarkerType.RESEARCH_COMPLETE)) {
+          results.push({
+            type: StreamMarkerType.RESEARCH_COMPLETE,
+            content: line.substring(StreamMarkerType.RESEARCH_COMPLETE.length).trim(),
+            timestamp: Date.now(),
+          });
+          markerFound = true;
         } else if (!this.inMarkdownBlock && line) {
           // Raw content line (only if not in markdown block and has content)
           results.push({

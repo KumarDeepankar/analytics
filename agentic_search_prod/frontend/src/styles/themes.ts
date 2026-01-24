@@ -11,6 +11,14 @@ export const themes: Record<Theme, ThemeColors> = {
     border: '#1E3A5F',
     hover: '#1E4976',
     accent: '#66B2FF',
+    // Semantic colors
+    mode: 'dark',
+    success: '#4CAF50',
+    warning: '#FF9800',
+    error: '#F44336',
+    info: '#2196F3',
+    favorite: '#FFD54F',
+    thinking: '#66B2FF',
   },
   sunset: {
     primary: '#FF6B35',
@@ -22,6 +30,14 @@ export const themes: Record<Theme, ThemeColors> = {
     border: '#4A3428',
     hover: '#3D2A1F',
     accent: '#FFB347',
+    // Semantic colors
+    mode: 'dark',
+    success: '#66BB6A',
+    warning: '#FFA726',
+    error: '#EF5350',
+    info: '#FF8A65',
+    favorite: '#FFCA28',
+    thinking: '#FFB347',
   },
   forest: {
     primary: '#4CAF50',
@@ -33,6 +49,14 @@ export const themes: Record<Theme, ThemeColors> = {
     border: '#2E5D30',
     hover: '#254D27',
     accent: '#81C784',
+    // Semantic colors
+    mode: 'dark',
+    success: '#81C784',
+    warning: '#FFB74D',
+    error: '#E57373',
+    info: '#4FC3F7',
+    favorite: '#FFD54F',
+    thinking: '#81C784',
   },
   lavender: {
     primary: '#9C27B0',
@@ -44,6 +68,14 @@ export const themes: Record<Theme, ThemeColors> = {
     border: '#4A148C',
     hover: '#38116B',
     accent: '#BA68C8',
+    // Semantic colors
+    mode: 'dark',
+    success: '#81C784',
+    warning: '#FFB74D',
+    error: '#F48FB1',
+    info: '#90CAF9',
+    favorite: '#FFD54F',
+    thinking: '#BA68C8',
   },
   minimal: {
     primary: '#333333',
@@ -55,6 +87,14 @@ export const themes: Record<Theme, ThemeColors> = {
     border: '#E0E0E0',
     hover: '#EEEEEE',
     accent: '#616161',
+    // Semantic colors
+    mode: 'light',
+    success: '#43A047',
+    warning: '#FB8C00',
+    error: '#E53935',
+    info: '#1E88E5',
+    favorite: '#FFC107',
+    thinking: '#1E88E5',
   },
 };
 

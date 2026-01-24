@@ -5,6 +5,7 @@
 import { useState } from 'react';
 import { useTheme } from '../contexts/ThemeContext';
 import { exportToPdf, isChartVisible } from '../services/pdfExportService';
+import { TRANSITION } from '../styles/animations';
 
 interface ExportPdfButtonProps {
   conversationElementId: string;
@@ -64,7 +65,7 @@ export function ExportPdfButton({
           backgroundColor: 'transparent',
           cursor: exporting || disabled ? 'not-allowed' : 'pointer',
           fontSize: '20px',
-          transition: 'all 0.3s cubic-bezier(0.16, 1, 0.3, 1)',
+          transition: TRANSITION.slow,
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',

@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { apiClient } from '../services/api';
 import type { AuthProvider } from '../types';
+import { TRANSITION } from '../styles/animations';
 
 interface LoginPageProps {
   onLoginSuccess: () => void;
@@ -142,7 +143,7 @@ export function LoginPage({ onLoginSuccess }: LoginPageProps) {
                   border: 'none',
                   borderRadius: '8px',
                   cursor: 'pointer',
-                  transition: 'all 0.2s',
+                  transition: TRANSITION.default,
                   boxShadow: '0 4px 12px rgba(0, 0, 0, 0.15)',
                   display: 'flex',
                   alignItems: 'center',
@@ -292,7 +293,7 @@ export function LoginPage({ onLoginSuccess }: LoginPageProps) {
               border: 'none',
               borderRadius: '8px',
               cursor: isLoading ? 'not-allowed' : 'pointer',
-              transition: 'all 0.2s',
+              transition: TRANSITION.default,
               boxShadow: isLoading
                 ? 'none'
                 : '0 4px 12px rgba(33, 150, 243, 0.3)',

@@ -27,6 +27,12 @@ _JWKS_CACHE: Dict[str, Any] = {
 SESSION_COOKIE_NAME = os.getenv("SESSION_COOKIE_NAME", "session_id")
 SESSION_COOKIE_MAX_AGE = int(os.getenv("SESSION_COOKIE_MAX_AGE", "28800"))  # 8 hours
 
+# Server Instance ID - generated on each startup
+# Used to invalidate sessions from previous server instances
+# This ensures users are forced to re-login after server restart
+SERVER_INSTANCE_ID = secrets.token_hex(16)
+logger.info(f"Server instance ID: {SERVER_INSTANCE_ID[:8]}...")
+
 # In-memory session store (use Redis in production)
 user_sessions: Dict[str, Dict[str, Any]] = {}
 
@@ -256,7 +262,8 @@ def create_session(user_data: Dict[str, Any], jwt_token: str) -> str:
         "user": user_data,
         "jwt_token": jwt_token,
         "created_at": datetime.now(),
-        "last_accessed": datetime.now()
+        "last_accessed": datetime.now(),
+        "server_instance": SERVER_INSTANCE_ID  # Track which server instance created this session
     }
 
     logger.info(f"Created session for user {user_data.get('email')}")

@@ -3,6 +3,7 @@ import { useChatContext } from '../contexts/ChatContext';
 import { apiClient } from '../services/api';
 import { StreamParser, readStream } from '../services/streamParser';
 import { StreamMarkerType } from '../types';
+import type { SearchMode } from '../types';
 import { getBackendUrl } from '../config';
 
 /**
@@ -20,6 +21,7 @@ export function useStreamingSearch() {
     updateStreamingContent,
     setLoading,
     setStreamingMessageId,
+    setSearchMode,
   } = useChatContext();
 
   const [isPending, startTransition] = useTransition();
@@ -89,17 +91,30 @@ export function useStreamingSearch() {
           }
         }
 
-        // Make API request
-        const response = await apiClient.search({
-          query,
-          enabled_tools: state.enabledTools,
-          session_id: state.sessionId,
-          is_followup: isFollowup,
-          conversation_history: conversationHistory.length > 0 ? conversationHistory : undefined,
-          theme: state.theme,
-          llm_provider: state.selectedProvider,
-          llm_model: state.selectedModel,
-        });
+        // Make API request based on search mode
+        let response: Response;
+        if (state.searchMode === 'research') {
+          // Deep research mode
+          response = await apiClient.research({
+            query,
+            session_id: state.sessionId,
+            enabled_tools: state.enabledTools,
+            llm_provider: state.selectedProvider,
+            llm_model: state.selectedModel,
+          });
+        } else {
+          // Quick search mode (default)
+          response = await apiClient.search({
+            query,
+            enabled_tools: state.enabledTools,
+            session_id: state.sessionId,
+            is_followup: isFollowup,
+            conversation_history: conversationHistory.length > 0 ? conversationHistory : undefined,
+            theme: state.theme,
+            llm_provider: state.selectedProvider,
+            llm_model: state.selectedModel,
+          });
+        }
 
         // Process stream
         await processStream(response, assistantMessageId);
@@ -115,12 +130,13 @@ export function useStreamingSearch() {
 
             if (error.message.includes('Authentication required') ||
                 error.message.includes('401') ||
-                error.message.includes('403')) {
-              errorMessage = '🔐 Authentication required. Please log in again.';
+                error.message.includes('403') ||
+                errorLower.includes('unauthorized')) {
+              errorMessage = '🔐 Session expired. Redirecting to login...';
               // Redirect to backend login page
               setTimeout(() => {
                 window.location.href = getBackendUrl('/auth/login');
-              }, 2000);
+              }, 1500);
             } else if (error.message.includes('Failed to fetch') ||
                        errorLower.includes('network') ||
                        errorLower.includes('connection')) {
@@ -164,6 +180,7 @@ export function useStreamingSearch() {
       state.theme,
       state.selectedProvider,
       state.selectedModel,
+      state.searchMode,
       addMessage,
       updateMessage,
       setStreamingMessageId,
@@ -232,8 +249,10 @@ export function useStreamingSearch() {
         for (const parsedChunk of parsedChunks) {
           switch (parsedChunk.type) {
             case StreamMarkerType.THINKING:
-              // Node started/completed
-
+              // Thinking/processing step from research agent
+              if (parsedChunk.content.trim()) {
+                addProcessingStep(messageId, parsedChunk.content);
+              }
               break;
 
             case StreamMarkerType.PROCESSING_STEP:
@@ -270,8 +289,13 @@ export function useStreamingSearch() {
                 const newSources = sources.filter(source => {
                   // Skip sources without URL
                   if (!source.url) return false;
-                  const normalizedUrl = source.url.toLowerCase().replace(/\/$/, '');
+                  // Handle url being an array (take first element) or string
+                  const urlValue = Array.isArray(source.url) ? source.url[0] : source.url;
+                  if (!urlValue || typeof urlValue !== 'string') return false;
+                  const normalizedUrl = urlValue.toLowerCase().replace(/\/$/, '');
                   if (!sourcesBufferRef.current.has(normalizedUrl)) {
+                    // Normalize the source object to have string url
+                    source.url = urlValue;
                     sourcesBufferRef.current.set(normalizedUrl, source);
                     return true;
                   }
@@ -298,6 +322,75 @@ export function useStreamingSearch() {
               clearSourcesAndCharts(messageId);
               sourcesBufferRef.current.clear();  // Clear deduplication buffer
               addProcessingStep(messageId, 'Retrying with reduced data...');
+              break;
+
+            // Deep Research markers
+            case StreamMarkerType.RESEARCH_START:
+              addProcessingStep(messageId, '🔬 Starting deep research...');
+              break;
+
+            case StreamMarkerType.PHASE:
+              // Phase changes (planning, aggregating, sampling, extracting, validating, synthesizing)
+              const phaseLabels: Record<string, string> = {
+                'planning': '📋 Planning research strategy',
+                'aggregating': '📊 Computing dataset statistics',
+                'sampling': '🎯 Sampling documents',
+                'extracting': '📝 Extracting findings',
+                'validating': '✓ Validating findings',
+                'synthesizing': '📄 Synthesizing report',
+              };
+              const phaseLabel = phaseLabels[parsedChunk.content] || `Phase: ${parsedChunk.content}`;
+              addProcessingStep(messageId, phaseLabel);
+              break;
+
+            case StreamMarkerType.PROGRESS:
+              // Progress percentage - could be used for a progress bar
+              addProcessingStep(messageId, `Progress: ${parsedChunk.content}%`);
+              break;
+
+            case StreamMarkerType.FINDING:
+              // New finding discovered
+              try {
+                const finding = JSON.parse(parsedChunk.content);
+                if (finding.claim) {
+                  addProcessingStep(messageId, `📌 Finding: ${finding.claim}`);
+                }
+              } catch {
+                // If not JSON, show as-is
+                addProcessingStep(messageId, `📌 ${parsedChunk.content}`);
+              }
+              break;
+
+            case StreamMarkerType.INTERIM_INSIGHT:
+              // Intermediate insight
+              addProcessingStep(messageId, `💡 ${parsedChunk.content}`);
+              break;
+
+            // Note: Research agent now uses MARKDOWN_CONTENT_START/END and FINAL_RESPONSE_START
+            // for the final report, same as quick search agent
+
+            case StreamMarkerType.KEY_FINDINGS:
+              // Key findings summary - could show in UI
+              try {
+                const keyFindings = JSON.parse(parsedChunk.content);
+                if (Array.isArray(keyFindings) && keyFindings.length > 0) {
+                  addProcessingStep(messageId, `🔑 ${keyFindings.length} key findings identified`);
+                }
+              } catch {
+                // Ignore parse errors
+              }
+              break;
+
+            case StreamMarkerType.RESEARCH_COMPLETE:
+              // Research complete with stats
+              try {
+                const stats = JSON.parse(parsedChunk.content);
+                addProcessingStep(messageId,
+                  `✅ Research complete: ${stats.findings_count || 0} findings from ${stats.docs_processed || 0} documents`
+                );
+              } catch {
+                addProcessingStep(messageId, '✅ Research complete');
+              }
               break;
 
             case StreamMarkerType.ERROR:
@@ -396,5 +489,7 @@ export function useStreamingSearch() {
     performSearch,
     cancelSearch,
     isSearching: state.isLoading || isPending,
+    searchMode: state.searchMode,
+    setSearchMode,
   };
 }

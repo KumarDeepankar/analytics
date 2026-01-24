@@ -8,6 +8,8 @@ import { useChatContext } from '../contexts/ChatContext';
 import { apiClient } from '../services/api';
 import { historyService } from '../services/historyService';
 import { getBackendUrl } from '../config';
+import { TRANSITION } from '../styles/animations';
+import { IconButton } from './Button';
 
 /**
  * Main chat interface component
@@ -33,6 +35,7 @@ export function ChatInterface() {
   const [showPreferencesPanel, setShowPreferencesPanel] = useState(false);
   const [userInstructions, setUserInstructions] = useState('');
   const [instructionsSaving, setInstructionsSaving] = useState(false);
+  const [unviewedShareCount, setUnviewedShareCount] = useState(0);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const toolsDropdownRef = useRef<HTMLDivElement>(null);
 
@@ -95,6 +98,23 @@ export function ChatInterface() {
       }
     }
     loadPreferences();
+  }, []);
+
+  // Load unviewed share count on mount and refresh periodically
+  useEffect(() => {
+    async function loadUnviewedCount() {
+      try {
+        const count = await historyService.getUnviewedShareCount();
+        setUnviewedShareCount(count);
+      } catch (error) {
+        console.error('Failed to load unviewed share count:', error);
+      }
+    }
+    loadUnviewedCount();
+
+    // Refresh every 60 seconds
+    const interval = setInterval(loadUnviewedCount, 60000);
+    return () => clearInterval(interval);
   }, []);
 
   // Load available models on mount
@@ -284,16 +304,20 @@ export function ChatInterface() {
     }
   };
 
-  // Load conversation from history
-  const handleLoadConversation = async (conversationId: string) => {
+  // Load conversation from history (own or shared)
+  const handleLoadConversation = async (conversationId: string, isShared?: boolean) => {
     try {
-      const conversation = await historyService.getConversation(conversationId);
+      const conversation = isShared
+        ? await historyService.getSharedConversation(conversationId)
+        : await historyService.getConversation(conversationId);
+
       if (conversation && conversation.messages) {
         dispatch({
           type: 'LOAD_CONVERSATION',
           payload: {
             sessionId: conversation.id,
             messages: conversation.messages,
+            isShared: isShared || false,
           },
         });
       }
@@ -394,7 +418,7 @@ export function ChatInterface() {
       className="chat-interface"
       style={{
         display: 'flex',
-        minHeight: '100vh',
+        height: '100vh',
         width: '100%',
         maxWidth: '100vw',
         overflow: 'hidden',
@@ -523,10 +547,10 @@ export function ChatInterface() {
             left: '50%',
             transform: 'translateX(-50%)',
             backgroundColor: toolsNotification.includes('connected!')
-              ? '#4CAF50'  // Green - success
+              ? themeColors.success
               : toolsNotification.includes('Reconnecting')
-                ? '#2196F3'  // Blue - in progress
-                : '#F44336', // Red - error
+                ? themeColors.info
+                : themeColors.error,
             color: 'white',
             padding: '10px 20px',
             borderRadius: '8px',
@@ -570,15 +594,15 @@ export function ChatInterface() {
           marginTop: '24px',
           letterSpacing: '2px',
           opacity: state.messages.length > 0 ? 1 : 0,
-          transition: 'opacity 0.3s ease',
+          transition: TRANSITION.opacity,
         }}>
           AGENTIC SEARCH
         </div>
 
         {/* Bottom Section - All Icons */}
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '12px', marginBottom: '80px' }}>
-          {/* History Section */}
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '2px' }}>
+          {/* Conversations Section */}
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '2px', position: 'relative' }}>
             <div
               style={{
                 fontSize: '9px',
@@ -588,11 +612,11 @@ export function ChatInterface() {
                 letterSpacing: '0.5px',
               }}
             >
-              History
+              Convos
             </div>
             <button
               onClick={() => setShowHistorySidebar(true)}
-              title="View History"
+              title="View Conversations"
               style={{
                 width: '40px',
                 height: '40px',
@@ -601,12 +625,13 @@ export function ChatInterface() {
                 backgroundColor: 'transparent',
                 cursor: 'pointer',
                 fontSize: '20px',
-                transition: 'all 0.3s cubic-bezier(0.16, 1, 0.3, 1)',
+                transition: TRANSITION.slow,
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
                 color: themeColors.text,
                 willChange: 'transform, background-color, border-color',
+                position: 'relative',
               }}
               onMouseEnter={(e) => {
                 e.currentTarget.style.backgroundColor = '#FF980015';
@@ -625,6 +650,30 @@ export function ChatInterface() {
                   <polyline points="12 6 12 12 16 14" />
                 </svg>
               </div>
+              {/* Notification Badge */}
+              {unviewedShareCount > 0 && (
+                <span
+                  style={{
+                    position: 'absolute',
+                    top: '-4px',
+                    right: '-4px',
+                    backgroundColor: '#E91E63',
+                    color: 'white',
+                    fontSize: '9px',
+                    fontWeight: '700',
+                    minWidth: '16px',
+                    height: '16px',
+                    borderRadius: '8px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    padding: '0 4px',
+                    boxShadow: '0 2px 4px rgba(0,0,0,0.3)',
+                  }}
+                >
+                  {unviewedShareCount > 9 ? '9+' : unviewedShareCount}
+                </span>
+              )}
             </button>
           </div>
 
@@ -652,7 +701,7 @@ export function ChatInterface() {
                 backgroundColor: 'transparent',
                 cursor: 'pointer',
                 fontSize: '20px',
-                transition: 'all 0.3s cubic-bezier(0.16, 1, 0.3, 1)',
+                transition: TRANSITION.slow,
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
@@ -730,7 +779,7 @@ export function ChatInterface() {
                 backgroundColor: 'transparent',
                 cursor: 'pointer',
                 fontSize: '20px',
-                transition: 'all 0.3s cubic-bezier(0.16, 1, 0.3, 1)',
+                transition: TRANSITION.slow,
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
@@ -805,7 +854,7 @@ export function ChatInterface() {
                     backgroundColor: 'transparent',
                     cursor: 'pointer',
                     fontSize: '18px',
-                    transition: 'all 0.3s cubic-bezier(0.16, 1, 0.3, 1)',
+                    transition: TRANSITION.slow,
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',
@@ -864,7 +913,7 @@ export function ChatInterface() {
                             backgroundColor: isSelected ? `${themeColors.accent}15` : 'transparent',
                             cursor: 'pointer',
                             textAlign: 'left',
-                            transition: 'all 0.2s ease',
+                            transition: TRANSITION.default,
                             marginBottom: '2px',
                           }}
                           onMouseEnter={(e) => {
@@ -973,14 +1022,14 @@ export function ChatInterface() {
                     backgroundColor: 'transparent',
                     cursor: 'pointer',
                     fontSize: '18px',
-                    transition: 'all 0.2s ease',
+                    transition: TRANSITION.default,
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',
                   }}
                   onMouseEnter={(e) => {
-                    e.currentTarget.style.backgroundColor = '#4CAF5015';
-                    e.currentTarget.style.borderColor = '#4CAF50';
+                    e.currentTarget.style.backgroundColor = `${themeColors.success}15`;
+                    e.currentTarget.style.borderColor = themeColors.success;
                   }}
                   onMouseLeave={(e) => {
                     e.currentTarget.style.backgroundColor = 'transparent';
@@ -1030,7 +1079,7 @@ export function ChatInterface() {
                             backgroundColor: isSelected ? `${themeColors.accent}15` : 'transparent',
                             cursor: 'pointer',
                             textAlign: 'left',
-                            transition: 'all 0.2s ease',
+                            transition: TRANSITION.default,
                             marginBottom: '2px',
                           }}
                           onMouseEnter={(e) => {
@@ -1086,7 +1135,7 @@ export function ChatInterface() {
                           color: themeColors.textSecondary,
                           fontSize: '11px',
                           cursor: 'pointer',
-                          transition: 'all 0.2s ease',
+                          transition: TRANSITION.default,
                           display: 'flex',
                           alignItems: 'center',
                           justifyContent: 'center',
@@ -1137,7 +1186,7 @@ export function ChatInterface() {
               backgroundColor: 'transparent',
               cursor: 'pointer',
               fontSize: '18px',
-              transition: 'all 0.2s ease',
+              transition: TRANSITION.default,
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
@@ -1168,43 +1217,48 @@ export function ChatInterface() {
 
       {/* Main content area with margins */}
       <div
-        id="main-scroll-container"
-        className="main-scroll-container"
         style={{
           flex: 1,
           display: 'flex',
           justifyContent: 'center',
           position: 'relative',
           marginLeft: '64px',
-          marginRight: '180px',
-          height: 'calc(100vh - 80px)',
-          overflowY: 'auto',
-          paddingBottom: '0px',
+          marginRight: '64px',
+          height: '100vh',
+          overflow: 'hidden',
         }}
       >
+        {/* Scrollable chat window */}
         <div
+          id="main-scroll-container"
+          className="main-scroll-container"
           style={{
             display: 'flex',
             flexDirection: 'column',
             width: '100%',
-            maxWidth: '1200px',
-            paddingLeft: '96px',
-            paddingRight: '96px',
+            maxWidth: '1100px',
+            height: 'calc(100vh - 140px)',
+            overflowY: 'auto',
+            overflowX: 'hidden',
+            paddingLeft: '32px',
+            paddingRight: '32px',
             paddingTop: '0px',
             paddingBottom: '20px',
+            scrollbarWidth: 'thin',
+            scrollbarColor: `${themeColors.border} transparent`,
           }}
         >
-        {/* Center content for first search only */}
-        {state.messages.length === 0 && (
-          <div style={{ minHeight: 'calc(100vh - 200px)', display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center' }}>
-            <h1 style={{ margin: 0, marginBottom: '48px', fontSize: '32px', fontWeight: '600', textAlign: 'center' }}>
-              Agentic Search
-            </h1>
-          </div>
-        )}
+          {/* Center content for first search only */}
+          {state.messages.length === 0 && (
+            <div style={{ minHeight: 'calc(100vh - 200px)', display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center' }}>
+              <h1 style={{ margin: 0, marginBottom: '48px', fontSize: '32px', fontWeight: '600', textAlign: 'center' }}>
+                Agentic Search
+              </h1>
+            </div>
+          )}
 
-        {/* Message list */}
-        {state.messages.length > 0 && <MessageList />}
+          {/* Message list */}
+          {state.messages.length > 0 && <MessageList />}
         </div>
 
         {/* Input area - fixed at bottom */}
@@ -1212,7 +1266,7 @@ export function ChatInterface() {
           position: 'fixed',
           bottom: '8px',
           left: '64px',
-          right: '180px',
+          right: '64px',
           display: 'flex',
           justifyContent: 'center',
           pointerEvents: 'none',
@@ -1220,9 +1274,9 @@ export function ChatInterface() {
         }}>
           <div style={{
             width: '100%',
-            maxWidth: '1200px',
-            paddingLeft: '96px',
-            paddingRight: '96px',
+            maxWidth: '1100px',
+            paddingLeft: '32px',
+            paddingRight: '32px',
             pointerEvents: 'auto',
           }}>
             <InputArea />

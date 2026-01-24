@@ -148,7 +148,10 @@ class MCPToolClient:
         self.client = httpx.AsyncClient(
             timeout=timeout,
             limits=limits,
-            http2=False
+            http2=False,
+            # Short keepalive to prevent connections from blocking shutdown
+            # Connections idle for more than 5 seconds will be closed
+            http1=True
         )
 
         # Per-user session pool: {user_email: session_id}

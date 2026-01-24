@@ -12,6 +12,33 @@ export interface ConversationSummary {
   updated_at: string;
 }
 
+export interface SharedConversation {
+  conversation_id: string;
+  owner_email: string;
+  title: string;
+  shared_at: string;
+  viewed: boolean;
+  updated_at: string;
+  message?: string;  // Optional note from the sharer
+}
+
+export interface ShareInfo {
+  shared_with_email: string;
+  shared_at: string;
+  viewed: boolean;
+  message?: string;  // Optional note included with the share
+}
+
+export interface DiscussionComment {
+  id: string | number;
+  message_id: string;
+  conversation_id: string;
+  user_email: string;
+  user_name: string;
+  comment: string;
+  created_at: string;
+}
+
 export interface ConversationDetail {
   id: string;
   title: string;
@@ -196,6 +223,165 @@ class HistoryService {
         this.pendingFeedbackSave = null;
       }
     }
+  }
+
+  // =========================================================================
+  // SHARING / COLLABORATION
+  // =========================================================================
+
+  /**
+   * Share a conversation with another user by email
+   */
+  async shareConversation(conversationId: string, sharedWithEmail: string, message?: string): Promise<boolean> {
+    const response = await fetch(getBackendUrl(`/conversations/${conversationId}/share`), {
+      method: 'POST',
+      credentials: 'include',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        shared_with_email: sharedWithEmail,
+        message: message || null,
+      }),
+    });
+
+    return response.ok;
+  }
+
+  /**
+   * Get list of users a conversation is shared with
+   */
+  async getConversationShares(conversationId: string): Promise<ShareInfo[]> {
+    const response = await fetch(getBackendUrl(`/conversations/${conversationId}/shares`), {
+      credentials: 'include',
+    });
+
+    if (!response.ok) {
+      return [];
+    }
+
+    const data = await response.json();
+    return data.shares || [];
+  }
+
+  /**
+   * Remove a share (stop sharing with a user)
+   */
+  async removeShare(conversationId: string, sharedWithEmail: string): Promise<boolean> {
+    const response = await fetch(
+      getBackendUrl(`/conversations/${conversationId}/share/${encodeURIComponent(sharedWithEmail)}`),
+      {
+        method: 'DELETE',
+        credentials: 'include',
+      }
+    );
+
+    return response.ok;
+  }
+
+  /**
+   * Get conversations shared with me
+   */
+  async getSharedWithMe(limit: number = 50): Promise<SharedConversation[]> {
+    const response = await fetch(getBackendUrl(`/conversations/shared/with-me?limit=${limit}`), {
+      credentials: 'include',
+    });
+
+    if (!response.ok) {
+      return [];
+    }
+
+    const data = await response.json();
+    return data.conversations || [];
+  }
+
+  /**
+   * Get count of unviewed shared conversations (for notification badge)
+   */
+  async getUnviewedShareCount(): Promise<number> {
+    const response = await fetch(getBackendUrl('/conversations/shared/unviewed-count'), {
+      credentials: 'include',
+    });
+
+    if (!response.ok) {
+      return 0;
+    }
+
+    const data = await response.json();
+    return data.unviewed_count || 0;
+  }
+
+  /**
+   * Get a shared conversation (marks as viewed)
+   */
+  async getSharedConversation(conversationId: string): Promise<ConversationDetail | null> {
+    const response = await fetch(getBackendUrl(`/conversations/shared/${conversationId}`), {
+      credentials: 'include',
+    });
+
+    if (response.status === 404) {
+      return null;
+    }
+
+    if (!response.ok) {
+      throw new Error(`Failed to fetch shared conversation: ${response.status}`);
+    }
+
+    return await response.json();
+  }
+
+  // =========================================================================
+  // DISCUSSION / COMMENTS
+  // =========================================================================
+
+  /**
+   * Add a discussion comment to a message
+   */
+  async addDiscussionComment(
+    conversationId: string,
+    messageId: string,
+    comment: string
+  ): Promise<DiscussionComment | null> {
+    const response = await fetch(getBackendUrl(`/conversations/${conversationId}/discuss`), {
+      method: 'POST',
+      credentials: 'include',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        message_id: messageId,
+        comment: comment,
+      }),
+    });
+
+    if (!response.ok) {
+      return null;
+    }
+
+    const data = await response.json();
+    return data.comment || null;
+  }
+
+  /**
+   * Get all discussion comments for a message
+   */
+  async getDiscussionComments(
+    conversationId: string,
+    messageId: string
+  ): Promise<DiscussionComment[]> {
+    const response = await fetch(
+      getBackendUrl(`/conversations/${conversationId}/discuss/${messageId}`),
+      {
+        credentials: 'include',
+      }
+    );
+
+    if (!response.ok) {
+      return [];
+    }
+
+    const data = await response.json();
+    return data.comments || [];
   }
 }
 

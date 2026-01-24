@@ -120,6 +120,9 @@ export async function exportToPdf(options: ExportOptions): Promise<boolean> {
         }
       });
 
+      // Add bottom padding to clone to prevent last line cut-off
+      clone.style.paddingBottom = '50px';
+
       // Small delay for reflow
       await new Promise(resolve => setTimeout(resolve, 100));
 
@@ -128,8 +131,8 @@ export async function exportToPdf(options: ExportOptions): Promise<boolean> {
         useCORS: true,
         logging: false,
         backgroundColor: '#ffffff',
-        windowHeight: clone.scrollHeight,
-        height: clone.scrollHeight
+        windowHeight: clone.scrollHeight + 100, // Extra height for padding
+        height: clone.scrollHeight + 100
       });
 
       // Remove the clone from DOM
@@ -139,25 +142,33 @@ export async function exportToPdf(options: ExportOptions): Promise<boolean> {
       const imgWidth = contentWidth;
       const ratio = imgWidth / conversationCanvas.width;
 
-      // Add padding at page breaks to reduce text cutting (25mm safe zone)
-      const pageBreakPadding = 25;
+      // Page break padding to prevent text cutting at boundaries
+      const pageBreakPadding = 20; // Safe zone at top/bottom of pages
 
       // Calculate page heights with padding
-      const firstPageContentHeight = contentHeight - 20 - pageBreakPadding;
+      const firstPageContentHeight = contentHeight - 20 - (pageBreakPadding * 2);
       const firstPageCanvasHeight = firstPageContentHeight / ratio;
-      const regularPageContentHeight = contentHeight - pageBreakPadding;
+      const regularPageContentHeight = contentHeight - (pageBreakPadding * 2);
       const regularPageCanvasHeight = regularPageContentHeight / ratio;
+
+      // Minimum slice height to avoid blank pages (in canvas pixels)
+      const minSliceHeight = 100;
 
       let sourceY = 0;
       let remainingCanvasHeight = conversationCanvas.height;
 
-      while (remainingCanvasHeight > 0) {
+      while (remainingCanvasHeight > minSliceHeight) {
         const pageCanvasHeight = currentPage === 0 ? firstPageCanvasHeight : regularPageCanvasHeight;
         const sliceHeight = Math.min(remainingCanvasHeight, pageCanvasHeight);
 
+        // Skip if remaining content is too small (prevents blank pages)
+        if (sliceHeight < minSliceHeight) {
+          break;
+        }
+
         if (currentPage > 0) {
           pdf.addPage();
-          yOffset = margin;
+          yOffset = margin + pageBreakPadding; // Start after top margin + padding
         }
 
         // Create a temporary canvas for this slice

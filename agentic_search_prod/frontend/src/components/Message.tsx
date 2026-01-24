@@ -127,7 +127,7 @@ export const Message = memo(({ message, hideProcessingSteps = false }: MessagePr
                       width: '4px',
                       height: '4px',
                       borderRadius: '50%',
-                      backgroundColor: '#64B5F6',
+                      backgroundColor: themeColors.thinking,
                       animation: 'thinkingDotReveal 1.4s ease-in-out infinite 0s',
                     }}
                   />
@@ -136,7 +136,7 @@ export const Message = memo(({ message, hideProcessingSteps = false }: MessagePr
                       width: '4px',
                       height: '4px',
                       borderRadius: '50%',
-                      backgroundColor: '#64B5F6',
+                      backgroundColor: themeColors.thinking,
                       animation: 'thinkingDotReveal 1.4s ease-in-out infinite 0.2s',
                     }}
                   />
@@ -145,7 +145,7 @@ export const Message = memo(({ message, hideProcessingSteps = false }: MessagePr
                       width: '4px',
                       height: '4px',
                       borderRadius: '50%',
-                      backgroundColor: '#64B5F6',
+                      backgroundColor: themeColors.thinking,
                       animation: 'thinkingDotReveal 1.4s ease-in-out infinite 0.4s',
                     }}
                   />

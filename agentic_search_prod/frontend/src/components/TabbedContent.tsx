@@ -3,6 +3,7 @@ import type { ChartConfig, ProcessingStep } from '../types';
 import { useTheme } from '../contexts/ThemeContext';
 import { ChartDisplay } from './ChartDisplay';
 import { ProcessingChain } from './ProcessingChain';
+import { TRANSITION } from '../styles/animations';
 
 interface TabbedContentProps {
   charts?: ChartConfig[];
@@ -56,7 +57,7 @@ export const TabbedContent = memo(({ charts, processingSteps }: TabbedContentPro
               fontSize: '13px',
               cursor: 'pointer',
               borderBottom: activeTab === 'thinking' ? `2px solid ${themeColors.accent}` : '2px solid transparent',
-              transition: 'all 0.2s ease',
+              transition: TRANSITION.default,
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
@@ -90,7 +91,7 @@ export const TabbedContent = memo(({ charts, processingSteps }: TabbedContentPro
               fontSize: '13px',
               cursor: 'pointer',
               borderBottom: activeTab === 'charts' ? `2px solid ${themeColors.accent}` : '2px solid transparent',
-              transition: 'all 0.2s ease',
+              transition: TRANSITION.default,
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
@@ -141,30 +142,37 @@ export const TabbedContent = memo(({ charts, processingSteps }: TabbedContentPro
               gap: '20px',
             }}
           >
-            {charts.map((chart, index) => (
-              <div
-                key={index}
-                style={{
-                  backgroundColor: themeColors.background,
-                  borderRadius: '12px',
-                  padding: '20px',
-                  border: `1px solid ${themeColors.border}`,
-                  minHeight: '350px',
-                  boxShadow: `0 2px 8px ${themeColors.border}40`,
-                  transition: 'all 0.2s ease',
-                }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.boxShadow = `0 4px 12px ${themeColors.border}60`;
-                  e.currentTarget.style.transform = 'translateY(-2px)';
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.boxShadow = `0 2px 8px ${themeColors.border}40`;
-                  e.currentTarget.style.transform = 'translateY(0)';
-                }}
-              >
-                <ChartDisplay config={chart} />
-              </div>
-            ))}
+            {charts.map((chart, index) => {
+              // Use stable key based on index only - chart data may change during streaming
+              const chartKey = `tabbed-chart-${index}`;
+              return (
+                <div
+                  key={chartKey}
+                  style={{
+                    backgroundColor: themeColors.background,
+                    borderRadius: '12px',
+                    padding: '20px',
+                    border: `1px solid ${themeColors.border}`,
+                    minHeight: '350px',
+                    boxShadow: `0 2px 8px ${themeColors.border}40`,
+                    transition: TRANSITION.default,
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.boxShadow = `0 4px 12px ${themeColors.border}60`;
+                    e.currentTarget.style.transform = 'translateY(-2px)';
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.boxShadow = `0 2px 8px ${themeColors.border}40`;
+                    e.currentTarget.style.transform = 'translateY(0)';
+                  }}
+                >
+                  <ChartDisplay
+                    config={chart}
+                    chartId={chartKey}
+                  />
+                </div>
+              );
+            })}
           </div>
         )}
       </div>

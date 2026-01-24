@@ -6,6 +6,7 @@
 import { useState, memo } from 'react';
 import { useTheme } from '../contexts/ThemeContext';
 import { historyService } from '../services/historyService';
+import { TRANSITION } from '../styles/animations';
 
 interface FeedbackRatingProps {
   messageId: string;
@@ -92,7 +93,6 @@ export const FeedbackRating = memo(({
           display: 'flex',
           alignItems: 'center',
           gap: '4px',
-          marginTop: '12px',
           flexWrap: 'wrap',
         }}
       >
@@ -117,8 +117,8 @@ export const FeedbackRating = memo(({
               padding: '2px',
               cursor: 'pointer',
               fontSize: '16px',
-              color: star <= displayRating ? '#FFD700' : themeColors.border,
-              transition: 'transform 0.1s ease, color 0.1s ease',
+              color: star <= displayRating ? themeColors.favorite : themeColors.border,
+              transition: TRANSITION.fast,
               transform: hoverRating >= star ? 'scale(1.2)' : 'scale(1)',
             }}
             title={hasRating ? `Update rating (currently ${rating} stars)` : `Rate ${star} star${star > 1 ? 's' : ''}`}
@@ -268,8 +268,8 @@ export const FeedbackRating = memo(({
                     padding: '4px',
                     cursor: 'pointer',
                     fontSize: '28px',
-                    color: star <= pendingRating ? '#FFD700' : themeColors.border,
-                    transition: 'transform 0.1s ease',
+                    color: star <= pendingRating ? themeColors.favorite : themeColors.border,
+                    transition: TRANSITION.fast,
                     transform: star <= pendingRating ? 'scale(1.1)' : 'scale(1)',
                   }}
                 >

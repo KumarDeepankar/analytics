@@ -1,5 +1,5 @@
 import { createContext, useContext, useReducer, type ReactNode } from 'react';
-import type { ChatState, ChatAction, Message, ProcessingStep, Source, ChartConfig } from '../types';
+import type { ChatState, ChatAction, Message, ProcessingStep, Source, ChartConfig, SearchMode } from '../types';
 
 // Initial state
 const initialState: ChatState = {
@@ -12,6 +12,8 @@ const initialState: ChatState = {
   selectedModel: '',
   theme: 'minimal',
   user: null,
+  searchMode: 'quick',
+  isSharedConversation: false,
 };
 
 // Reducer function
@@ -178,6 +180,12 @@ function chatReducer(state: ChatState, action: ChatAction): ChatState {
         user: action.payload,
       };
 
+    case 'SET_SEARCH_MODE':
+      return {
+        ...state,
+        searchMode: action.payload,
+      };
+
     case 'RESET_CHAT':
       return {
         ...initialState,
@@ -187,6 +195,8 @@ function chatReducer(state: ChatState, action: ChatAction): ChatState {
         selectedModel: state.selectedModel,
         theme: state.theme,
         user: state.user,
+        searchMode: state.searchMode,
+        isSharedConversation: false,
       };
 
     case 'LOAD_CONVERSATION':
@@ -200,6 +210,7 @@ function chatReducer(state: ChatState, action: ChatAction): ChatState {
         })),
         isLoading: false,
         currentStreamingMessageId: null,
+        isSharedConversation: action.payload.isShared || false,
       };
 
     default:
@@ -220,6 +231,7 @@ interface ChatContextType {
   updateStreamingContent: (messageId: string, content: string) => void;
   setLoading: (loading: boolean) => void;
   setStreamingMessageId: (id: string | null) => void;
+  setSearchMode: (mode: SearchMode) => void;
   resetChat: () => void;
 }
 
@@ -282,6 +294,10 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     dispatch({ type: 'RESET_CHAT' });
   };
 
+  const setSearchMode = (mode: SearchMode) => {
+    dispatch({ type: 'SET_SEARCH_MODE', payload: mode });
+  };
+
   const value: ChatContextType = {
     state,
     dispatch,
@@ -294,6 +310,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     updateStreamingContent,
     setLoading,
     setStreamingMessageId,
+    setSearchMode,
     resetChat,
   };
 

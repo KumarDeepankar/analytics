@@ -1,6 +1,7 @@
 import { memo, useState } from 'react';
 import type { ProcessingStep } from '../types';
 import { useTheme } from '../contexts/ThemeContext';
+import { TRANSITION } from '../styles/animations';
 
 interface ProcessingChainProps {
   steps: ProcessingStep[];
@@ -27,7 +28,7 @@ export const ProcessingChain = memo(({ steps }: ProcessingChainProps) => {
         padding: '0',
         marginBottom: '8px',
         fontSize: '11px',
-        transition: 'all 0.2s ease',
+        transition: TRANSITION.default,
       }}
     >
       <style>{`
@@ -112,7 +113,7 @@ export const ProcessingChain = memo(({ steps }: ProcessingChainProps) => {
             }}
           >
             <span style={{
-              transition: 'transform 0.3s cubic-bezier(0.16, 1, 0.3, 1)',
+              transition: TRANSITION.transform,
               transform: isExpanded ? 'rotate(180deg)' : 'rotate(0deg)',
               display: 'inline-block',
             }}>▼</span>
@@ -127,7 +128,7 @@ export const ProcessingChain = memo(({ steps }: ProcessingChainProps) => {
           display: 'flex',
           flexDirection: 'column',
           gap: '0',
-          transition: 'all 0.4s cubic-bezier(0.16, 1, 0.3, 1)',
+          transition: TRANSITION.slow,
           overflow: 'hidden',
         }}
       >

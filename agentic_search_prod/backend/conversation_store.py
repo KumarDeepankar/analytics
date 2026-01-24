@@ -203,6 +203,152 @@ def get_feedback(message_id: str, conversation_id: str) -> Optional[Dict[str, An
     return get_backend().get_feedback(message_id, conversation_id)
 
 
+# =============================================================================
+# COLLABORATION / SHARING FUNCTIONS
+# =============================================================================
+
+def share_conversation(
+    conversation_id: str,
+    owner_email: str,
+    shared_with_email: str,
+    message: Optional[str] = None
+) -> bool:
+    """
+    Share a conversation with another user.
+
+    Args:
+        conversation_id: Conversation ID to share
+        owner_email: Email of the conversation owner
+        shared_with_email: Email of the user to share with
+        message: Optional note to include with the share
+
+    Returns:
+        True if successful, False otherwise
+    """
+    return get_backend().share_conversation(conversation_id, owner_email, shared_with_email, message)
+
+
+def get_shared_with_me(user_email: str, limit: int = 50) -> List[Dict[str, Any]]:
+    """
+    Get conversations shared with this user.
+
+    Args:
+        user_email: User's email address
+        limit: Maximum number of conversations to return
+
+    Returns:
+        List of shared conversation objects with owner info
+    """
+    return get_backend().get_shared_with_me(user_email, limit)
+
+
+def get_conversation_shares(conversation_id: str, owner_email: str) -> List[Dict[str, Any]]:
+    """
+    Get list of users a conversation is shared with.
+
+    Args:
+        conversation_id: Conversation ID
+        owner_email: Owner's email (for authorization)
+
+    Returns:
+        List of share objects with shared_with_email and shared_at
+    """
+    return get_backend().get_conversation_shares(conversation_id, owner_email)
+
+
+def remove_share(
+    conversation_id: str,
+    owner_email: str,
+    shared_with_email: str
+) -> bool:
+    """
+    Remove a share (unshare conversation with a user).
+
+    Args:
+        conversation_id: Conversation ID
+        owner_email: Owner's email (for authorization)
+        shared_with_email: Email of user to unshare with
+
+    Returns:
+        True if removed, False otherwise
+    """
+    return get_backend().remove_share(conversation_id, owner_email, shared_with_email)
+
+
+def get_unviewed_share_count(user_email: str) -> int:
+    """
+    Get count of unviewed shared conversations for notification badge.
+
+    Args:
+        user_email: User's email address
+
+    Returns:
+        Count of unviewed shares
+    """
+    return get_backend().get_unviewed_share_count(user_email)
+
+
+def get_shared_conversation(conversation_id: str, user_email: str) -> Optional[Dict[str, Any]]:
+    """
+    Get a conversation that was shared with this user.
+
+    Args:
+        conversation_id: Conversation ID
+        user_email: User's email (recipient of share)
+
+    Returns:
+        Conversation object with messages, or None if not found/not shared
+    """
+    backend = get_backend()
+    # Check if backend has this method (SQLite does, others may not yet)
+    if hasattr(backend, 'get_shared_conversation'):
+        return backend.get_shared_conversation(conversation_id, user_email)
+    return None
+
+
+# =============================================================================
+# DISCUSSION / COMMENTS FUNCTIONS
+# =============================================================================
+
+def add_discussion_comment(
+    message_id: str,
+    conversation_id: str,
+    user_email: str,
+    user_name: str,
+    comment: str
+) -> Optional[Dict[str, Any]]:
+    """
+    Add a discussion comment to a message.
+
+    Args:
+        message_id: ID of the message being commented on
+        conversation_id: Conversation ID
+        user_email: Email of the commenter
+        user_name: Display name of the commenter
+        comment: The comment text
+
+    Returns:
+        The created comment object, or None if failed
+    """
+    return get_backend().add_discussion_comment(
+        message_id, conversation_id, user_email, user_name, comment
+    )
+
+
+def get_discussion_comments(message_id: str, conversation_id: str) -> List[Dict[str, Any]]:
+    """
+    Get all discussion comments for a message.
+
+    Args:
+        message_id: ID of the message
+        conversation_id: Conversation ID
+
+    Returns:
+        List of comment objects with user info and timestamps
+    """
+    return get_backend().get_discussion_comments(message_id, conversation_id)
+
+
 def sync_user_cache(user_email: str, limit: int = 20) -> None:
     """
     Sync user's recent conversations from permanent storage to local cache.

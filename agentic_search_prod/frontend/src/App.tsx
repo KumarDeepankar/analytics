@@ -57,6 +57,9 @@ function App() {
       withCredentials: true
     });
 
+    // Flag to prevent multiple session checks on rapid SSE reconnection attempts
+    let isCheckingSession = false;
+
     eventSource.addEventListener('logout', (event) => {
       console.log('Received logout event:', event.data);
       localStorage.removeItem('enabledTools');
@@ -68,10 +71,35 @@ function App() {
       // Connection is alive, no action needed
     });
 
-    eventSource.onerror = (error) => {
-      console.warn('SSE connection error:', error);
-      // Don't redirect on SSE error - might be temporary network issue
-      // The backend will still reject requests if session is invalid
+    eventSource.onerror = async () => {
+      // Prevent multiple simultaneous session checks
+      if (isCheckingSession) return;
+      isCheckingSession = true;
+
+      console.warn('SSE connection error - checking session validity');
+      // SSE doesn't provide HTTP status, so we need to check if session is valid
+      // by making a quick API call. This handles server restart scenarios.
+      try {
+        const response = await fetch(getBackendUrl('/tools'), {
+          credentials: 'include'
+        });
+        if (response.status === 401 || response.status === 403) {
+          // Session is invalid - redirect to login
+          console.log('Session invalid after SSE error, redirecting to login');
+          localStorage.removeItem('enabledTools');
+          setAuthError(true);
+          eventSource.close();
+          window.location.href = getBackendUrl('/auth/login');
+          return;
+        }
+        // If auth check passed, it's just a temporary network issue - SSE will auto-reconnect
+      } catch (fetchError) {
+        // Network error - SSE will auto-reconnect when network is back
+        console.warn('Network error during session check:', fetchError);
+      } finally {
+        // Reset flag after a delay to allow for retry
+        setTimeout(() => { isCheckingSession = false; }, 5000);
+      }
     };
 
     return () => {

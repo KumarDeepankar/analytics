@@ -17,7 +17,17 @@ from conversation_store import (
     toggle_favorite,
     save_preferences,
     get_preferences,
-    save_feedback
+    save_feedback,
+    # Sharing functions
+    share_conversation,
+    get_shared_with_me,
+    get_conversation_shares,
+    remove_share,
+    get_unviewed_share_count,
+    get_shared_conversation,
+    # Discussion functions
+    add_discussion_comment,
+    get_discussion_comments
 )
 
 logger = logging.getLogger(__name__)
@@ -43,6 +53,18 @@ class SaveFeedbackRequest(BaseModel):
     conversation_id: str
     rating: int  # 1-5 stars
     feedback_text: Optional[str] = None
+
+
+class ShareConversationRequest(BaseModel):
+    """Request body for sharing a conversation"""
+    shared_with_email: str
+    message: Optional[str] = None  # Optional note to include with the share
+
+
+class AddDiscussionCommentRequest(BaseModel):
+    """Request body for adding a discussion comment"""
+    message_id: str
+    comment: str
 
 
 @router.get("")
@@ -243,4 +265,228 @@ async def save_feedback_endpoint(body: SaveFeedbackRequest, request: Request):
         "success": True,
         "message_id": body.message_id,
         "rating": body.rating
+    })
+
+
+# =============================================================================
+# SHARING / COLLABORATION ENDPOINTS
+# =============================================================================
+
+@router.post("/{conversation_id}/share")
+async def share_conversation_endpoint(
+    conversation_id: str,
+    body: ShareConversationRequest,
+    request: Request
+):
+    """
+    Share a conversation with another user by email.
+
+    The shared user will see this conversation in their "Shared with me" list.
+    """
+    user = require_auth(request)
+    owner_email = user.get("email")
+
+    if not owner_email:
+        raise HTTPException(status_code=400, detail="User email not found")
+
+    logger.info(f"[API] POST /conversations/{conversation_id}/share - owner={owner_email}, share_with={body.shared_with_email}, has_message={bool(body.message)}")
+
+    success = share_conversation(
+        conversation_id=conversation_id,
+        owner_email=owner_email,
+        shared_with_email=body.shared_with_email,
+        message=body.message
+    )
+
+    if not success:
+        raise HTTPException(status_code=400, detail="Failed to share conversation. Make sure you own this conversation.")
+
+    return JSONResponse(content={
+        "success": True,
+        "conversation_id": conversation_id,
+        "shared_with": body.shared_with_email
+    })
+
+
+@router.get("/{conversation_id}/shares")
+async def get_shares_endpoint(conversation_id: str, request: Request):
+    """
+    Get list of users this conversation is shared with.
+
+    Only the owner can see who the conversation is shared with.
+    """
+    user = require_auth(request)
+    owner_email = user.get("email")
+
+    if not owner_email:
+        raise HTTPException(status_code=400, detail="User email not found")
+
+    shares = get_conversation_shares(conversation_id, owner_email)
+
+    return JSONResponse(content={
+        "conversation_id": conversation_id,
+        "shares": shares
+    })
+
+
+@router.delete("/{conversation_id}/share/{shared_with_email}")
+async def remove_share_endpoint(
+    conversation_id: str,
+    shared_with_email: str,
+    request: Request
+):
+    """
+    Remove a share (stop sharing with a user).
+
+    Only the owner can remove shares.
+    """
+    user = require_auth(request)
+    owner_email = user.get("email")
+
+    if not owner_email:
+        raise HTTPException(status_code=400, detail="User email not found")
+
+    logger.info(f"[API] DELETE /conversations/{conversation_id}/share/{shared_with_email} - owner={owner_email}")
+
+    success = remove_share(
+        conversation_id=conversation_id,
+        owner_email=owner_email,
+        shared_with_email=shared_with_email
+    )
+
+    if not success:
+        raise HTTPException(status_code=404, detail="Share not found or not authorized")
+
+    return JSONResponse(content={
+        "success": True,
+        "conversation_id": conversation_id,
+        "removed": shared_with_email
+    })
+
+
+@router.get("/shared/with-me")
+async def get_shared_with_me_endpoint(request: Request, limit: int = 50):
+    """
+    Get conversations shared with the current user.
+
+    Returns conversations shared by other users with this user.
+    """
+    user = require_auth(request)
+    user_email = user.get("email")
+
+    if not user_email:
+        raise HTTPException(status_code=400, detail="User email not found")
+
+    shared_conversations = get_shared_with_me(user_email, limit)
+
+    return JSONResponse(content={
+        "conversations": shared_conversations,
+        "count": len(shared_conversations)
+    })
+
+
+@router.get("/shared/unviewed-count")
+async def get_unviewed_count_endpoint(request: Request):
+    """
+    Get count of unviewed shared conversations for notification badge.
+
+    Returns the number of shared conversations the user hasn't viewed yet.
+    """
+    user = require_auth(request)
+    user_email = user.get("email")
+
+    if not user_email:
+        raise HTTPException(status_code=400, detail="User email not found")
+
+    count = get_unviewed_share_count(user_email)
+
+    return JSONResponse(content={
+        "unviewed_count": count
+    })
+
+
+@router.get("/shared/{conversation_id}")
+async def get_shared_conversation_endpoint(conversation_id: str, request: Request):
+    """
+    Get a conversation that was shared with the current user.
+
+    This is different from the regular get endpoint - it checks sharing permissions
+    instead of ownership. Also marks the share as viewed.
+    """
+    user = require_auth(request)
+    user_email = user.get("email")
+
+    if not user_email:
+        raise HTTPException(status_code=400, detail="User email not found")
+
+    conversation = get_shared_conversation(conversation_id, user_email)
+
+    if not conversation:
+        raise HTTPException(status_code=404, detail="Shared conversation not found")
+
+    return JSONResponse(content=conversation)
+
+
+# =============================================================================
+# DISCUSSION / COMMENTS ENDPOINTS
+# =============================================================================
+
+@router.post("/{conversation_id}/discuss")
+async def add_discussion_comment_endpoint(
+    conversation_id: str,
+    body: AddDiscussionCommentRequest,
+    request: Request
+):
+    """
+    Add a discussion comment to a message.
+
+    Both the owner and users the conversation is shared with can add comments.
+    """
+    user = require_auth(request)
+    user_email = user.get("email")
+    user_name = user.get("name", user_email.split("@")[0])
+
+    if not user_email:
+        raise HTTPException(status_code=400, detail="User email not found")
+
+    logger.info(f"[API] POST /conversations/{conversation_id}/discuss - user={user_email}, message={body.message_id}")
+
+    # Add the comment (authorization is checked in the backend - owner or shared user)
+    comment = add_discussion_comment(
+        message_id=body.message_id,
+        conversation_id=conversation_id,
+        user_email=user_email,
+        user_name=user_name,
+        comment=body.comment
+    )
+
+    if not comment:
+        raise HTTPException(status_code=400, detail="Failed to add comment")
+
+    return JSONResponse(content={
+        "success": True,
+        "comment": comment
+    })
+
+
+@router.get("/{conversation_id}/discuss/{message_id}")
+async def get_discussion_comments_endpoint(
+    conversation_id: str,
+    message_id: str,
+    request: Request
+):
+    """
+    Get all discussion comments for a message.
+    """
+    user = require_auth(request)
+    user_email = user.get("email")
+
+    if not user_email:
+        raise HTTPException(status_code=400, detail="User email not found")
+
+    comments = get_discussion_comments(message_id, conversation_id)
+
+    return JSONResponse(content={
+        "comments": comments,
+        "count": len(comments)
     })

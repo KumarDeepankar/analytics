@@ -115,6 +115,9 @@ class SQLiteBackend(ConversationStorageBackend):
     ) -> bool:
         """Save or update a conversation"""
         try:
+            # Normalize email to lowercase for consistent storage
+            user_email = user_email.lower()
+
             with self._get_connection() as conn:
                 cursor = conn.cursor()
 
@@ -204,12 +207,15 @@ class SQLiteBackend(ConversationStorageBackend):
     ) -> List[Dict[str, Any]]:
         """Get list of conversations for a user"""
         try:
+            # Normalize email to lowercase
+            user_email = user_email.lower()
+
             with self._get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute("""
                     SELECT id, title, is_favorite, created_at, updated_at
                     FROM conversations
-                    WHERE user_email = ?
+                    WHERE LOWER(user_email) = ?
                     ORDER BY is_favorite DESC, updated_at DESC
                     LIMIT ?
                 """, (user_email, limit))
@@ -237,6 +243,9 @@ class SQLiteBackend(ConversationStorageBackend):
     ) -> Optional[Dict[str, Any]]:
         """Get a specific conversation with all messages"""
         try:
+            # Normalize email to lowercase
+            user_email = user_email.lower()
+
             with self._get_connection() as conn:
                 cursor = conn.cursor()
 
@@ -244,7 +253,7 @@ class SQLiteBackend(ConversationStorageBackend):
                 cursor.execute("""
                     SELECT id, title, created_at, updated_at
                     FROM conversations
-                    WHERE id = ? AND user_email = ?
+                    WHERE id = ? AND LOWER(user_email) = ?
                 """, (conversation_id, user_email))
 
                 conv_row = cursor.fetchone()
@@ -298,22 +307,45 @@ class SQLiteBackend(ConversationStorageBackend):
         conversation_id: str,
         user_email: str
     ) -> bool:
-        """Delete a conversation"""
+        """Delete a conversation and all related data (shares, discussions)"""
         try:
+            # Normalize email to lowercase for consistent matching
+            user_email_lower = user_email.lower()
+
             with self._get_connection() as conn:
                 cursor = conn.cursor()
 
-                # Delete conversation (messages cascade due to foreign key)
+                # 1. Delete all shares for this conversation (case-insensitive)
+                cursor.execute("""
+                    DELETE FROM shared_conversations
+                    WHERE conversation_id = ? AND LOWER(owner_email) = ?
+                """, (conversation_id, user_email_lower))
+                shares_deleted = cursor.rowcount
+                if shares_deleted > 0:
+                    logger.debug(f"Deleted {shares_deleted} shares for conversation {conversation_id}")
+
+                # 2. Delete all discussion comments for this conversation
+                cursor.execute("""
+                    DELETE FROM discussion_comments
+                    WHERE conversation_id = ?
+                """, (conversation_id,))
+                comments_deleted = cursor.rowcount
+                if comments_deleted > 0:
+                    logger.debug(f"Deleted {comments_deleted} discussion comments for conversation {conversation_id}")
+
+                # 3. Delete conversation (messages cascade due to foreign key) - case-insensitive
                 cursor.execute("""
                     DELETE FROM conversations
-                    WHERE id = ? AND user_email = ?
-                """, (conversation_id, user_email))
+                    WHERE id = ? AND LOWER(user_email) = ?
+                """, (conversation_id, user_email_lower))
 
                 deleted = cursor.rowcount > 0
                 conn.commit()
 
                 if deleted:
-                    logger.info(f"Deleted conversation {conversation_id}")
+                    logger.info(f"Deleted conversation {conversation_id} and all related data")
+                else:
+                    logger.warning(f"Conversation {conversation_id} not found for user {user_email}")
 
                 return deleted
 
@@ -328,13 +360,16 @@ class SQLiteBackend(ConversationStorageBackend):
     ) -> Optional[bool]:
         """Toggle favorite status of a conversation"""
         try:
+            # Normalize email to lowercase
+            user_email = user_email.lower()
+
             with self._get_connection() as conn:
                 cursor = conn.cursor()
 
                 # Get current status
                 cursor.execute("""
                     SELECT is_favorite FROM conversations
-                    WHERE id = ? AND user_email = ?
+                    WHERE id = ? AND LOWER(user_email) = ?
                 """, (conversation_id, user_email))
 
                 row = cursor.fetchone()
@@ -346,7 +381,7 @@ class SQLiteBackend(ConversationStorageBackend):
                 cursor.execute("""
                     UPDATE conversations
                     SET is_favorite = ?
-                    WHERE id = ? AND user_email = ?
+                    WHERE id = ? AND LOWER(user_email) = ?
                 """, (new_status, conversation_id, user_email))
 
                 conn.commit()
@@ -364,6 +399,9 @@ class SQLiteBackend(ConversationStorageBackend):
     ) -> bool:
         """Save user preferences/instructions for the agent"""
         try:
+            # Normalize email to lowercase
+            user_email = user_email.lower()
+
             with self._get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute("""
@@ -386,11 +424,14 @@ class SQLiteBackend(ConversationStorageBackend):
     ) -> Optional[str]:
         """Get user preferences/instructions"""
         try:
+            # Normalize email to lowercase
+            user_email = user_email.lower()
+
             with self._get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute("""
                     SELECT instructions FROM user_preferences
-                    WHERE user_email = ?
+                    WHERE LOWER(user_email) = ?
                 """, (user_email,))
                 row = cursor.fetchone()
                 return row["instructions"] if row else None
@@ -413,13 +454,16 @@ class SQLiteBackend(ConversationStorageBackend):
             return False
 
         try:
+            # Normalize email to lowercase
+            user_email = user_email.lower()
+
             with self._get_connection() as conn:
                 cursor = conn.cursor()
 
                 # Verify the conversation belongs to the user
                 cursor.execute("""
                     SELECT id FROM conversations
-                    WHERE id = ? AND user_email = ?
+                    WHERE id = ? AND LOWER(user_email) = ?
                 """, (conversation_id, user_email))
 
                 if not cursor.fetchone():
@@ -471,6 +515,439 @@ class SQLiteBackend(ConversationStorageBackend):
         except Exception as e:
             logger.error(f"Error getting feedback: {e}")
             return None
+
+    # =========================================================================
+    # COLLABORATION / SHARING METHODS
+    # =========================================================================
+
+    def _init_sharing_table(self, conn) -> None:
+        """Initialize the sharing table (called lazily on first share operation)"""
+        cursor = conn.cursor()
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS shared_conversations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                conversation_id TEXT NOT NULL,
+                owner_email TEXT NOT NULL,
+                shared_with_email TEXT NOT NULL,
+                shared_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                viewed INTEGER DEFAULT 0,
+                message TEXT,
+                UNIQUE(conversation_id, shared_with_email),
+                FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+            )
+        """)
+        # Migration: Add message column if it doesn't exist (for existing DBs)
+        try:
+            cursor.execute("ALTER TABLE shared_conversations ADD COLUMN message TEXT")
+        except sqlite3.OperationalError:
+            pass  # Column already exists
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_shared_with ON shared_conversations(shared_with_email)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_shared_conv ON shared_conversations(conversation_id)")
+        conn.commit()
+
+    def share_conversation(
+        self,
+        conversation_id: str,
+        owner_email: str,
+        shared_with_email: str,
+        message: Optional[str] = None
+    ) -> bool:
+        """Share a conversation with another user"""
+        # Normalize emails to lowercase
+        owner_email = owner_email.lower()
+        shared_with_email = shared_with_email.lower()
+
+        # Prevent sharing with yourself
+        if owner_email == shared_with_email:
+            logger.warning("Cannot share conversation with yourself")
+            return False
+
+        try:
+            with self._get_connection() as conn:
+                self._init_sharing_table(conn)
+                cursor = conn.cursor()
+
+                # Verify the conversation belongs to the owner
+                cursor.execute("""
+                    SELECT id FROM conversations
+                    WHERE id = ? AND LOWER(user_email) = ?
+                """, (conversation_id, owner_email))
+
+                if not cursor.fetchone():
+                    logger.error(f"Conversation {conversation_id} not found for owner {owner_email}")
+                    return False
+
+                # Insert share (or ignore if already shared)
+                cursor.execute("""
+                    INSERT OR IGNORE INTO shared_conversations
+                    (conversation_id, owner_email, shared_with_email, message)
+                    VALUES (?, ?, ?, ?)
+                """, (conversation_id, owner_email, shared_with_email, message))
+
+                conn.commit()
+                logger.info(f"Shared conversation {conversation_id} with {shared_with_email}")
+                return True
+
+        except Exception as e:
+            logger.error(f"Error sharing conversation: {e}")
+            return False
+
+    def get_shared_with_me(
+        self,
+        user_email: str,
+        limit: int = 50
+    ) -> List[Dict[str, Any]]:
+        """Get conversations shared with this user"""
+        try:
+            with self._get_connection() as conn:
+                self._init_sharing_table(conn)
+                cursor = conn.cursor()
+
+                cursor.execute("""
+                    SELECT
+                        sc.conversation_id,
+                        sc.owner_email,
+                        sc.shared_at,
+                        sc.viewed,
+                        sc.message,
+                        c.title,
+                        c.updated_at
+                    FROM shared_conversations sc
+                    JOIN conversations c ON sc.conversation_id = c.id
+                    WHERE sc.shared_with_email = ?
+                    ORDER BY sc.shared_at DESC
+                    LIMIT ?
+                """, (user_email.lower(), limit))
+
+                return [
+                    {
+                        "conversation_id": row["conversation_id"],
+                        "owner_email": row["owner_email"],
+                        "shared_at": row["shared_at"],
+                        "viewed": bool(row["viewed"]),
+                        "message": row["message"],
+                        "title": row["title"],
+                        "updated_at": row["updated_at"]
+                    }
+                    for row in cursor.fetchall()
+                ]
+
+        except Exception as e:
+            logger.error(f"Error getting shared conversations: {e}")
+            return []
+
+    def get_conversation_shares(
+        self,
+        conversation_id: str,
+        owner_email: str
+    ) -> List[Dict[str, Any]]:
+        """Get list of users a conversation is shared with"""
+        try:
+            # Normalize email to lowercase
+            owner_email = owner_email.lower()
+
+            with self._get_connection() as conn:
+                self._init_sharing_table(conn)
+                cursor = conn.cursor()
+
+                # Verify ownership
+                cursor.execute("""
+                    SELECT id FROM conversations
+                    WHERE id = ? AND LOWER(user_email) = ?
+                """, (conversation_id, owner_email))
+
+                if not cursor.fetchone():
+                    return []
+
+                cursor.execute("""
+                    SELECT shared_with_email, shared_at, viewed, message
+                    FROM shared_conversations
+                    WHERE conversation_id = ? AND LOWER(owner_email) = ?
+                    ORDER BY shared_at DESC
+                """, (conversation_id, owner_email))
+
+                return [
+                    {
+                        "shared_with_email": row["shared_with_email"],
+                        "shared_at": row["shared_at"],
+                        "viewed": bool(row["viewed"]),
+                        "message": row["message"]
+                    }
+                    for row in cursor.fetchall()
+                ]
+
+        except Exception as e:
+            logger.error(f"Error getting conversation shares: {e}")
+            return []
+
+    def remove_share(
+        self,
+        conversation_id: str,
+        owner_email: str,
+        shared_with_email: str
+    ) -> bool:
+        """Remove a share (unshare conversation with a user)"""
+        try:
+            # Normalize emails to lowercase
+            owner_email = owner_email.lower()
+            shared_with_email = shared_with_email.lower()
+
+            with self._get_connection() as conn:
+                self._init_sharing_table(conn)
+                cursor = conn.cursor()
+
+                # Verify ownership
+                cursor.execute("""
+                    SELECT id FROM conversations
+                    WHERE id = ? AND LOWER(user_email) = ?
+                """, (conversation_id, owner_email))
+
+                if not cursor.fetchone():
+                    logger.error(f"Conversation {conversation_id} not found for owner {owner_email}")
+                    return False
+
+                cursor.execute("""
+                    DELETE FROM shared_conversations
+                    WHERE conversation_id = ? AND LOWER(shared_with_email) = ?
+                """, (conversation_id, shared_with_email))
+
+                deleted = cursor.rowcount > 0
+                conn.commit()
+
+                if deleted:
+                    logger.info(f"Removed share of {conversation_id} with {shared_with_email}")
+
+                return deleted
+
+        except Exception as e:
+            logger.error(f"Error removing share: {e}")
+            return False
+
+    def mark_share_viewed(
+        self,
+        conversation_id: str,
+        user_email: str
+    ) -> bool:
+        """Mark a shared conversation as viewed by the recipient"""
+        try:
+            with self._get_connection() as conn:
+                self._init_sharing_table(conn)
+                cursor = conn.cursor()
+
+                cursor.execute("""
+                    UPDATE shared_conversations
+                    SET viewed = 1
+                    WHERE conversation_id = ? AND shared_with_email = ?
+                """, (conversation_id, user_email.lower()))
+
+                updated = cursor.rowcount > 0
+                conn.commit()
+                return updated
+
+        except Exception as e:
+            logger.error(f"Error marking share as viewed: {e}")
+            return False
+
+    def get_unviewed_share_count(
+        self,
+        user_email: str
+    ) -> int:
+        """Get count of unviewed shared conversations for notification badge"""
+        try:
+            with self._get_connection() as conn:
+                self._init_sharing_table(conn)
+                cursor = conn.cursor()
+
+                cursor.execute("""
+                    SELECT COUNT(*) as count
+                    FROM shared_conversations
+                    WHERE shared_with_email = ? AND viewed = 0
+                """, (user_email.lower(),))
+
+                row = cursor.fetchone()
+                return row["count"] if row else 0
+
+        except Exception as e:
+            logger.error(f"Error getting unviewed share count: {e}")
+            return 0
+
+    def get_shared_conversation(
+        self,
+        conversation_id: str,
+        user_email: str
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Get a conversation that was shared with this user.
+        Similar to get_conversation but checks sharing permissions instead of ownership.
+        """
+        try:
+            with self._get_connection() as conn:
+                self._init_sharing_table(conn)
+                cursor = conn.cursor()
+
+                # Check if this conversation is shared with the user
+                cursor.execute("""
+                    SELECT sc.owner_email, c.id, c.title, c.created_at, c.updated_at
+                    FROM shared_conversations sc
+                    JOIN conversations c ON sc.conversation_id = c.id
+                    WHERE sc.conversation_id = ? AND sc.shared_with_email = ?
+                """, (conversation_id, user_email.lower()))
+
+                conv_row = cursor.fetchone()
+                if not conv_row:
+                    return None
+
+                # Get messages
+                cursor.execute("""
+                    SELECT id, type, content, timestamp, metadata, feedback_rating, feedback_text
+                    FROM messages
+                    WHERE conversation_id = ?
+                    ORDER BY timestamp ASC
+                """, (conversation_id,))
+
+                messages = []
+                for row in cursor.fetchall():
+                    msg = {
+                        "id": row["id"],
+                        "type": row["type"],
+                        "content": row["content"],
+                        "timestamp": row["timestamp"]
+                    }
+                    if row["metadata"]:
+                        try:
+                            metadata = json.loads(row["metadata"])
+                            msg.update(metadata)
+                        except json.JSONDecodeError:
+                            pass
+                    if row["feedback_rating"]:
+                        msg["feedbackRating"] = row["feedback_rating"]
+                    if row["feedback_text"]:
+                        msg["feedbackText"] = row["feedback_text"]
+                    messages.append(msg)
+
+                # Mark as viewed
+                self.mark_share_viewed(conversation_id, user_email)
+
+                return {
+                    "id": conv_row["id"],
+                    "title": conv_row["title"],
+                    "owner_email": conv_row["owner_email"],
+                    "created_at": conv_row["created_at"],
+                    "updated_at": conv_row["updated_at"],
+                    "messages": messages,
+                    "is_shared": True  # Flag to indicate this is a shared conversation
+                }
+
+        except Exception as e:
+            logger.error(f"Error getting shared conversation: {e}")
+            return None
+
+    # =========================================================================
+    # DISCUSSION / COMMENTS METHODS
+    # =========================================================================
+
+    def _init_discussion_table(self, conn) -> None:
+        """Initialize the discussion comments table"""
+        cursor = conn.cursor()
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS discussion_comments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                message_id TEXT NOT NULL,
+                conversation_id TEXT NOT NULL,
+                user_email TEXT NOT NULL,
+                user_name TEXT NOT NULL,
+                comment TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+            )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_discussion_msg ON discussion_comments(message_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_discussion_conv ON discussion_comments(conversation_id)")
+        conn.commit()
+
+    def add_discussion_comment(
+        self,
+        message_id: str,
+        conversation_id: str,
+        user_email: str,
+        user_name: str,
+        comment: str
+    ) -> Optional[Dict[str, Any]]:
+        """Add a discussion comment to a message"""
+        try:
+            # Normalize email to lowercase
+            user_email = user_email.lower()
+
+            with self._get_connection() as conn:
+                self._init_discussion_table(conn)
+                cursor = conn.cursor()
+
+                cursor.execute("""
+                    INSERT INTO discussion_comments
+                    (message_id, conversation_id, user_email, user_name, comment)
+                    VALUES (?, ?, ?, ?, ?)
+                """, (message_id, conversation_id, user_email, user_name, comment))
+
+                comment_id = cursor.lastrowid
+                conn.commit()
+
+                # Return the created comment
+                cursor.execute("""
+                    SELECT id, message_id, conversation_id, user_email, user_name, comment, created_at
+                    FROM discussion_comments WHERE id = ?
+                """, (comment_id,))
+
+                row = cursor.fetchone()
+                if row:
+                    return {
+                        "id": row["id"],
+                        "message_id": row["message_id"],
+                        "conversation_id": row["conversation_id"],
+                        "user_email": row["user_email"],
+                        "user_name": row["user_name"],
+                        "comment": row["comment"],
+                        "created_at": row["created_at"]
+                    }
+                return None
+
+        except Exception as e:
+            logger.error(f"Error adding discussion comment: {e}")
+            return None
+
+    def get_discussion_comments(
+        self,
+        message_id: str,
+        conversation_id: str
+    ) -> List[Dict[str, Any]]:
+        """Get all discussion comments for a message"""
+        try:
+            with self._get_connection() as conn:
+                self._init_discussion_table(conn)
+                cursor = conn.cursor()
+
+                cursor.execute("""
+                    SELECT id, message_id, conversation_id, user_email, user_name, comment, created_at
+                    FROM discussion_comments
+                    WHERE message_id = ? AND conversation_id = ?
+                    ORDER BY created_at ASC
+                """, (message_id, conversation_id))
+
+                return [
+                    {
+                        "id": row["id"],
+                        "message_id": row["message_id"],
+                        "conversation_id": row["conversation_id"],
+                        "user_email": row["user_email"],
+                        "user_name": row["user_name"],
+                        "comment": row["comment"],
+                        "created_at": row["created_at"]
+                    }
+                    for row in cursor.fetchall()
+                ]
+
+        except Exception as e:
+            logger.error(f"Error getting discussion comments: {e}")
+            return []
 
 
 # Register the backend with the factory

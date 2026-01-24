@@ -182,3 +182,165 @@ class ConversationStorageBackend(ABC):
             Feedback dict with rating and text, or None if not found
         """
         pass
+
+    # =========================================================================
+    # COLLABORATION / SHARING METHODS
+    # =========================================================================
+
+    @abstractmethod
+    def share_conversation(
+        self,
+        conversation_id: str,
+        owner_email: str,
+        shared_with_email: str,
+        message: Optional[str] = None
+    ) -> bool:
+        """
+        Share a conversation with another user.
+
+        Args:
+            conversation_id: Conversation ID to share
+            owner_email: Email of the conversation owner
+            shared_with_email: Email of the user to share with
+            message: Optional note to include with the share
+
+        Returns:
+            True if successful, False otherwise
+        """
+        pass
+
+    @abstractmethod
+    def get_shared_with_me(
+        self,
+        user_email: str,
+        limit: int = 50
+    ) -> List[Dict[str, Any]]:
+        """
+        Get conversations shared with this user.
+
+        Args:
+            user_email: User's email address
+            limit: Maximum number of conversations to return
+
+        Returns:
+            List of shared conversation objects with owner info
+        """
+        pass
+
+    @abstractmethod
+    def get_conversation_shares(
+        self,
+        conversation_id: str,
+        owner_email: str
+    ) -> List[Dict[str, Any]]:
+        """
+        Get list of users a conversation is shared with.
+
+        Args:
+            conversation_id: Conversation ID
+            owner_email: Owner's email (for authorization)
+
+        Returns:
+            List of share objects with shared_with_email and shared_at
+        """
+        pass
+
+    @abstractmethod
+    def remove_share(
+        self,
+        conversation_id: str,
+        owner_email: str,
+        shared_with_email: str
+    ) -> bool:
+        """
+        Remove a share (unshare conversation with a user).
+
+        Args:
+            conversation_id: Conversation ID
+            owner_email: Owner's email (for authorization)
+            shared_with_email: Email of user to unshare with
+
+        Returns:
+            True if removed, False otherwise
+        """
+        pass
+
+    @abstractmethod
+    def mark_share_viewed(
+        self,
+        conversation_id: str,
+        user_email: str
+    ) -> bool:
+        """
+        Mark a shared conversation as viewed by the recipient.
+
+        Args:
+            conversation_id: Conversation ID
+            user_email: Email of the user viewing the share
+
+        Returns:
+            True if updated, False otherwise
+        """
+        pass
+
+    @abstractmethod
+    def get_unviewed_share_count(
+        self,
+        user_email: str
+    ) -> int:
+        """
+        Get count of unviewed shared conversations for notification badge.
+
+        Args:
+            user_email: User's email address
+
+        Returns:
+            Count of unviewed shares
+        """
+        pass
+
+    # =========================================================================
+    # DISCUSSION / COMMENTS METHODS
+    # =========================================================================
+
+    @abstractmethod
+    def add_discussion_comment(
+        self,
+        message_id: str,
+        conversation_id: str,
+        user_email: str,
+        user_name: str,
+        comment: str
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Add a discussion comment to a message.
+
+        Args:
+            message_id: ID of the message being commented on
+            conversation_id: Conversation ID
+            user_email: Email of the commenter
+            user_name: Display name of the commenter
+            comment: The comment text
+
+        Returns:
+            The created comment object, or None if failed
+        """
+        pass
+
+    @abstractmethod
+    def get_discussion_comments(
+        self,
+        message_id: str,
+        conversation_id: str
+    ) -> List[Dict[str, Any]]:
+        """
+        Get all discussion comments for a message.
+
+        Args:
+            message_id: ID of the message
+            conversation_id: Conversation ID
+
+        Returns:
+            List of comment objects with user info and timestamps
+        """
+        pass

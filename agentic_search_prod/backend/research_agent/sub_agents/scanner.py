@@ -35,8 +35,8 @@ class ScannerInput(BaseModel):
     tool_args: Dict[str, Any] = Field(default_factory=dict, description="Arguments passed directly to MCP tool")
 
     # Batch processing parameters
-    batch_size: int = Field(default=75, description="Documents per batch")
-    max_batches: int = Field(default=4, description="Maximum batches to process (max 300 docs = 4 batches × 75)")
+    batch_size: int = Field(default=50, description="Documents per batch")
+    max_batches: int = Field(default=6, description="Maximum batches to process (max 300 docs = 6 batches × 50)")
 
     # LLM extraction parameters
     extraction_focus: str = Field(default="", description="What to focus on when extracting findings")

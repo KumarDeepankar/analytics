@@ -226,12 +226,12 @@ export function InputArea() {
   // Memoized submit button hover handlers
   const handleSubmitEnter = useCallback((e: React.MouseEvent<HTMLButtonElement>) => {
     if (canSubmit) {
-      e.currentTarget.style.transform = 'scale(1.05)';
+      e.currentTarget.style.transform = 'translateY(-50%) scale(1.05)';
     }
   }, [canSubmit]);
 
   const handleSubmitLeave = useCallback((e: React.MouseEvent<HTMLButtonElement>) => {
-    e.currentTarget.style.transform = 'scale(1)';
+    e.currentTarget.style.transform = 'translateY(-50%)';
   }, []);
 
   // Memoized dynamic styles for toggle

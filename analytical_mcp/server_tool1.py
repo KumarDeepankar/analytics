@@ -12,8 +12,6 @@ from typing import Optional, List, Dict, Any
 from fastmcp.tools.tool import ToolResult
 from rapidfuzz import fuzz
 
-from index_metadata import IndexMetadata
-from input_validator import InputValidator
 from text_search import text_search_with_filters
 from query_classifier import classify_search_text
 from document_merge import get_merged_documents_batch

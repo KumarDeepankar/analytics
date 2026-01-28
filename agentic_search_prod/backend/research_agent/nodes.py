@@ -44,7 +44,9 @@ from .config import (
     MAX_RESEARCH_ITERATIONS,
     MAX_PARALLEL_SUB_AGENTS,
     MIN_CONFIDENCE_THRESHOLD,
-    EARLY_STOP_NO_NEW_FINDINGS
+    EARLY_STOP_NO_NEW_FINDINGS,
+    SUB_AGENT_TIMEOUT,
+    TOOL_CALL_TIMEOUT
 )
 from .error_handler import (
     categorize_error,
@@ -281,7 +283,8 @@ async def planning_node(state: ResearchAgentState) -> ResearchAgentState:
         prompt = create_initial_plan_prompt(
             query=state["input"],
             enabled_tools=state.get("enabled_tools", []),
-            tool_descriptions=tool_descriptions
+            tool_descriptions=tool_descriptions,
+            user_preferences=state.get("user_preferences")
         )
         print("\n" + "="*80)
         print("PLANNER PROMPT (Initial):")
@@ -296,7 +299,8 @@ async def planning_node(state: ResearchAgentState) -> ResearchAgentState:
             current_state=state,
             available_agents=list(sub_agent_registry._agents.keys()),
             enabled_tools=state.get("enabled_tools", []),
-            tool_descriptions=tool_descriptions
+            tool_descriptions=tool_descriptions,
+            user_preferences=state.get("user_preferences")
         )
         print("\n" + "="*80)
         print(f"PLANNER PROMPT (Iteration {state['iteration_count']}):")
@@ -488,7 +492,6 @@ async def execute_sub_agents_node(state: ResearchAgentState) -> ResearchAgentSta
         phase_map = {
             "decomposer": ResearchPhase.DECOMPOSING,
             "aggregator": ResearchPhase.AGGREGATING,
-            "sampler": ResearchPhase.SAMPLING,
             "scanner": ResearchPhase.SCANNING,
             "extractor": ResearchPhase.EXTRACTING,
             "validator": ResearchPhase.VALIDATING,
@@ -536,7 +539,7 @@ async def execute_sub_agents_node(state: ResearchAgentState) -> ResearchAgentSta
         aggregation_results = state.get("aggregation_results", [])
 
         # For tool-using sub-agents, set default tool if no tool option specified
-        if agent_name in ["aggregator", "sampler", "scanner"]:
+        if agent_name in ["aggregator", "scanner"]:
             has_tool_spec = (
                 args.get("tool_name") or
                 args.get("tool_names") or
@@ -545,7 +548,12 @@ async def execute_sub_agents_node(state: ResearchAgentState) -> ResearchAgentSta
             if not has_tool_spec and primary_tool:
                 # Default to primary tool for backward compatibility
                 args["tool_name"] = primary_tool
-            # Scanner gets tool_args from context.last_successful_tool_args (handled in scanner.py)
+            # Scanner: also fill in extraction_focus and sub_questions from state
+            if agent_name == "scanner":
+                if not args.get("extraction_focus"):
+                    args["extraction_focus"] = original_query
+                if not args.get("sub_questions"):
+                    args["sub_questions"] = [q.get("question", "") for q in sub_questions]
         elif agent_name == "decomposer":
             if not args.get("query"):
                 args["query"] = original_query
@@ -561,6 +569,8 @@ async def execute_sub_agents_node(state: ResearchAgentState) -> ResearchAgentSta
                 args["aggregation_results"] = aggregation_results
             if not args.get("sub_questions"):
                 args["sub_questions"] = sub_questions
+            if not args.get("user_preferences"):
+                args["user_preferences"] = state.get("user_preferences")
         elif agent_name == "validator":
             if not args.get("original_query"):
                 args["original_query"] = original_query
@@ -593,12 +603,25 @@ async def execute_sub_agents_node(state: ResearchAgentState) -> ResearchAgentSta
             logger.debug(f"{agent_name} arguments: {arguments}")
 
             try:
-                result = await sub_agent_registry.call(agent_name, arguments, context)
+                result = await asyncio.wait_for(
+                    sub_agent_registry.call(agent_name, arguments, context),
+                    timeout=SUB_AGENT_TIMEOUT
+                )
                 return {
                     "agent_name": agent_name,
                     "arguments": arguments,
                     "result": result,
                     "success": True
+                }
+            except asyncio.TimeoutError:
+                logger.error(f"Sub-agent {agent_name} timed out after {SUB_AGENT_TIMEOUT}s")
+                return {
+                    "agent_name": agent_name,
+                    "arguments": arguments,
+                    "error": f"Sub-agent {agent_name} timed out after {SUB_AGENT_TIMEOUT}s",
+                    "error_category": "timeout",
+                    "user_message": f"{agent_name} took too long and was stopped",
+                    "success": False
                 }
             except Exception as e:
                 error_str = str(e)
@@ -661,7 +684,10 @@ async def execute_sub_agents_node(state: ResearchAgentState) -> ResearchAgentSta
 
         while retry_count <= MAX_RETRIES:
             try:
-                result = await sub_agent_registry.call(agent_name, arguments, context)
+                result = await asyncio.wait_for(
+                    sub_agent_registry.call(agent_name, arguments, context),
+                    timeout=SUB_AGENT_TIMEOUT
+                )
                 completed_calls.append({
                     "agent_name": agent_name,
                     "arguments": arguments,
@@ -670,6 +696,17 @@ async def execute_sub_agents_node(state: ResearchAgentState) -> ResearchAgentSta
                 })
                 state["thinking_steps"].append(f"Completed: {agent_name}")
                 break  # Success - exit retry loop
+            except asyncio.TimeoutError:
+                logger.error(f"Sub-agent {agent_name} timed out after {SUB_AGENT_TIMEOUT}s")
+                completed_calls.append({
+                    "agent_name": agent_name,
+                    "arguments": arguments,
+                    "error": f"Sub-agent {agent_name} timed out after {SUB_AGENT_TIMEOUT}s",
+                    "error_category": "timeout",
+                    "user_message": f"{agent_name} took too long and was stopped",
+                    "success": False
+                })
+                break
             except Exception as e:
                 error_str = str(e)
                 error_category = categorize_error(error_str)
@@ -729,13 +766,26 @@ async def execute_sub_agents_node(state: ResearchAgentState) -> ResearchAgentSta
             logger.info(f"Direct tool call: {tool_name} with {list(arguments.keys())}")
 
             try:
-                result = await mcp_client.call_tool(tool_name, arguments)
+                result = await asyncio.wait_for(
+                    mcp_client.call_tool(tool_name, arguments),
+                    timeout=TOOL_CALL_TIMEOUT
+                )
                 return {
                     "tool_name": tool_name,
                     "arguments": arguments,
                     "reasoning": reasoning,
                     "result": result,
                     "success": True
+                }
+            except asyncio.TimeoutError:
+                logger.error(f"Tool {tool_name} timed out after {TOOL_CALL_TIMEOUT}s")
+                return {
+                    "tool_name": tool_name,
+                    "arguments": arguments,
+                    "error": f"Tool {tool_name} timed out after {TOOL_CALL_TIMEOUT}s",
+                    "error_category": "timeout",
+                    "user_message": f"{tool_name} took too long and was stopped",
+                    "success": False
                 }
             except Exception as e:
                 error_str = str(e)
@@ -911,22 +961,6 @@ async def accumulate_results_node(state: ResearchAgentState) -> ResearchAgentSta
                 else:
                     logger.warning(f"DEBUG Scanner: No sources returned from scanner!")
 
-        elif agent_name == "sampler":
-            # Samples feed into extractor and also provide sources
-            samples = result.get("samples", [])
-            state["thinking_steps"].append(f"Sampled {len(samples)} documents")
-
-            # Extract sources from samples (consistent with quick search agent)
-            for sample in samples:
-                content = sample.get("content", {})
-                source = {
-                    "title": content.get("title", content.get("name", f"Document {sample.get('doc_id', 'unknown')}")),
-                    "url": content.get("url", content.get("link", f"doc://{sample.get('doc_id', '')}")),
-                    "snippet": str(content.get("summary", content.get("description", "")))[:200]
-                }
-                if source["url"]:  # Only add if we have a URL
-                    state["extracted_sources"].append(source)
-
         elif agent_name == "validator":
             state["validation_status"] = result.get("status")
             state["validation_issues"] = result.get("issues", [])
@@ -1028,20 +1062,47 @@ async def accumulate_results_node(state: ResearchAgentState) -> ResearchAgentSta
             state["thinking_steps"].append(f"Note: {total_docs - docs_fetched} more documents available for deep scan")
             logger.info(f"Full scan needed: {total_docs} total, {docs_fetched} fetched")
 
-        # Extract chart configs via pass-through (same as ollama_query_agent)
-        charts = extract_chart_config_from_tool_result(result)
-        if charts:
-            state["chart_configs"].extend(charts)
-            logger.info(f"Extracted {len(charts)} charts from {tool_name}")
+        # Note: chart_configs already extracted in execute_sub_agents_node (avoid duplicates)
 
         logger.info(f"Accumulated results from tool {tool_name}")
 
     # Check for early stopping (no new findings)
+    # Only count iterations where data-fetching agents ran (scanner, aggregator, extractor)
+    # or direct tool_calls executed. LLM-only agents (decomposer, perspective, gap_analyzer)
+    # don't fetch new data, so they shouldn't trigger the "no new findings" counter.
+    DATA_FETCHING_AGENTS = {"scanner", "aggregator", "extractor"}
+    data_agents_ran = any(
+        call.get("success") and call.get("agent_name") in DATA_FETCHING_AGENTS
+        for call in completed_calls
+    )
+    tool_calls_ran = any(
+        call.get("success") for call in completed_tool_calls
+    )
+
     findings_after = len(state.get("findings", []))
-    if findings_after == findings_before:
-        state["batches_with_no_new_findings"] += 1
-    else:
-        state["batches_with_no_new_findings"] = 0
+    if data_agents_ran or tool_calls_ran:
+        # Only update counter when data-fetching work actually happened
+        if findings_after == findings_before:
+            state["batches_with_no_new_findings"] += 1
+        else:
+            state["batches_with_no_new_findings"] = 0
+
+    # Auto-compute confidence from data coverage (unless validator already set it)
+    # This makes the confidence >= 0.7 routing check in route_after_accumulation meaningful
+    if state.get("validation_status") is None:
+        confidence = 0.0
+        if len(state.get("aggregation_results", [])) > 0:
+            confidence += 0.3  # We have statistical overview
+        if len(state.get("findings", [])) > 0:
+            confidence += 0.2  # We have extracted findings
+        total_available = state.get("total_docs_available", 0)
+        docs_fetched = state.get("docs_fetched", 0)
+        if total_available > 0 and docs_fetched > 0:
+            coverage = min(1.0, docs_fetched / total_available)
+            confidence += 0.3 * coverage  # Proportional to doc coverage
+        if not state.get("needs_full_scan", False) and docs_fetched > 0:
+            confidence += 0.2  # All available docs have been fetched
+        state["overall_confidence"] = min(1.0, confidence)
 
     # Clear completed calls
     state["completed_sub_agent_calls"] = []
@@ -1126,7 +1187,8 @@ async def synthesis_node(state: ResearchAgentState) -> Dict[str, Any]:
                 "findings": state["findings"],
                 "aggregation_results": state["aggregation_results"],
                 "sub_questions": state["sub_questions"],
-                "format": "comprehensive_report"
+                "format": "comprehensive_report",
+                "user_preferences": state.get("user_preferences")
             },
             context
         )

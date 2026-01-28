@@ -17,6 +17,7 @@ from input_validator import InputValidator
 from text_search import text_search_with_filters
 from query_classifier import classify_search_text
 from document_merge import get_merged_documents_batch
+from pagination import create_pit, delete_pit, parse_search_after, apply_pagination_to_search, build_pagination_metadata
 
 # Configure logging
 logging.basicConfig(
@@ -338,7 +339,10 @@ async def analyze_events(
     stats_fields: Optional[str] = None,
     top_n: int = 20,
     top_n_per_group: int = 5,
-    samples_per_bucket: int = SAMPLES_PER_BUCKET_DEFAULT
+    samples_per_bucket: int = SAMPLES_PER_BUCKET_DEFAULT,
+    page_size: int = MAX_DOCUMENTS,
+    search_after: Optional[str] = None,
+    pit_id: Optional[str] = None
 ) -> ToolResult:
     """
     Analyze events with filtering, grouping, and statistics.
@@ -374,6 +378,31 @@ async def analyze_events(
         except json.JSONDecodeError as e:
             return ToolResult(content=[], structured_content={
                 "error": f"Invalid filters JSON: {e}"
+            })
+
+    # ===== PARSE & VALIDATE PAGINATION PARAMS =====
+
+    # Clamp page_size to [1, 100]
+    page_size = max(1, min(100, page_size))
+
+    # Parse search_after
+    parsed_search_after = None
+    if search_after:
+        try:
+            parsed_search_after = parse_search_after(search_after)
+        except ValueError as e:
+            return ToolResult(content=[], structured_content={
+                "error": str(e)
+            })
+
+    # Auto-create PIT when search_after is provided without pit_id
+    active_pit_id = pit_id
+    if parsed_search_after and not active_pit_id:
+        try:
+            active_pit_id = await create_pit(opensearch_request, INDEX_NAME)
+        except Exception as e:
+            return ToolResult(content=[], structured_content={
+                "error": f"Failed to create PIT for pagination: {str(e)}"
             })
 
     # ===== CLASSIFY FALLBACK_SEARCH (if provided) =====
@@ -615,8 +644,9 @@ async def analyze_events(
 
     has_filters = bool(filter_clauses) or bool(search_terms)
     has_aggregation = bool(group_by_fields or parsed_date_histogram or parsed_numeric_histogram or parsed_stats_fields)
+    has_pagination = bool(parsed_search_after) or (page_size != MAX_DOCUMENTS)
 
-    if not has_filters and not has_aggregation:
+    if not has_filters and not has_aggregation and not has_pagination:
         return ToolResult(content=[], structured_content={
             "status": "empty_query",
             "error": "Query is empty - specify filter or aggregation",
@@ -651,8 +681,10 @@ async def analyze_events(
             opensearch_request=opensearch_request,
             index_name=INDEX_NAME,
             unique_id_field=UNIQUE_ID_FIELD,
-            max_results=MAX_DOCUMENTS,
-            source_fields=RESULT_FIELDS
+            max_results=page_size,
+            source_fields=RESULT_FIELDS,
+            pit_id=active_pit_id,
+            search_after=parsed_search_after
         )
 
         if search_result["status"] == "success":
@@ -690,7 +722,8 @@ async def analyze_events(
                 "data_context": search_data_context,
                 "documents": search_docs,
                 "warnings": warnings,
-                "match_metadata": match_metadata
+                "match_metadata": match_metadata,
+                "pagination": search_result.get("pagination")
             })
         else:
             return ToolResult(content=[], structured_content={
@@ -703,7 +736,8 @@ async def analyze_events(
                 },
                 "error": f"No results found for search: '{' '.join(search_terms)}'",
                 "warnings": warnings,
-                "match_metadata": match_metadata
+                "match_metadata": match_metadata,
+                "pagination": search_result.get("pagination")
             })
 
     # ===== BUILD OPENSEARCH QUERY =====
@@ -713,7 +747,7 @@ async def analyze_events(
     }
 
     doc_fields = RESULT_FIELDS
-    top_level_doc_size = 0 if (samples_per_bucket > 0 and group_by_fields) else MAX_DOCUMENTS
+    top_level_doc_size = 0 if (samples_per_bucket > 0 and group_by_fields) else page_size
 
     search_body: Dict[str, Any] = {
         "query": query_body,
@@ -825,10 +859,21 @@ async def analyze_events(
             "extended_stats": {"field": stats_field}
         }
 
+    # ===== ADD DETERMINISTIC SORT + PIT PAGINATION =====
+
+    # Always add deterministic sort for consistent pagination
+    search_body["sort"] = [{UNIQUE_ID_FIELD: {"order": "asc"}}]
+
+    # Apply PIT-based pagination if active
+    search_url = f"{INDEX_NAME}/_search"
+    if active_pit_id:
+        apply_pagination_to_search(search_body, active_pit_id, parsed_search_after)
+        search_url = "_search"
+
     # ===== EXECUTE SEARCH =====
 
     try:
-        data = await opensearch_request("POST", f"{INDEX_NAME}/_search", search_body)
+        data = await opensearch_request("POST", search_url, search_body)
     except Exception as e:
         return ToolResult(content=[], structured_content={
             "error": f"Search failed: {str(e)}"
@@ -868,6 +913,15 @@ async def analyze_events(
         })
 
     hits = data.get("hits", {}).get("hits", [])
+
+    # Build pagination metadata from raw hits
+    pagination = build_pagination_metadata(hits, total_hits, active_pit_id, page_size)
+
+    # Auto-cleanup PIT when no more pages (prevents resource leak)
+    if active_pit_id and not pagination.get("has_more", True):
+        await delete_pit(opensearch_request, active_pit_id)
+        pagination["pit_id"] = None  # Signal PIT is closed
+
     collapsed_documents = [h["_source"] for h in hits]
 
     if collapsed_documents:
@@ -1062,7 +1116,8 @@ async def analyze_events(
         "data_context": data_context,
         "aggregations": aggregations if not filter_only_mode else {},
         "warnings": warnings,
-        "chart_config": chart_config if not filter_only_mode else []
+        "chart_config": chart_config if not filter_only_mode else [],
+        "pagination": pagination
     }
 
     response["documents"] = documents

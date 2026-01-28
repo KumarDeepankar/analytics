@@ -9,7 +9,6 @@ from .decomposer import DecomposerAgent
 from .perspective import PerspectiveAgent
 from .aggregator import AggregatorAgent
 from .scanner import ScannerAgent
-from .sampler import SamplerAgent
 from .extractor import ExtractorAgent
 from .synthesizer import SynthesizerAgent
 from .validator import ValidatorAgent
@@ -25,7 +24,6 @@ def create_sub_agent_registry() -> SubAgentRegistry:
     registry.register(PerspectiveAgent())
     registry.register(AggregatorAgent())
     registry.register(ScannerAgent())
-    registry.register(SamplerAgent())
     registry.register(ExtractorAgent())
     registry.register(SynthesizerAgent())
     registry.register(ValidatorAgent())
@@ -40,7 +38,6 @@ __all__ = [
     "PerspectiveAgent",
     "AggregatorAgent",
     "ScannerAgent",
-    "SamplerAgent",
     "ExtractorAgent",
     "SynthesizerAgent",
     "ValidatorAgent",

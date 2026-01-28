@@ -18,7 +18,6 @@ class ResearchPhase(str, Enum):
     PLANNING = "planning"
     DECOMPOSING = "decomposing"
     AGGREGATING = "aggregating"
-    SAMPLING = "sampling"
     SCANNING = "scanning"
     EXTRACTING = "extracting"
     VALIDATING = "validating"
@@ -89,21 +88,6 @@ class AggregatorOutput(BaseModel):
     sources: List[Dict[str, Any]] = Field(default_factory=list, description="Extracted sources from MCP results")
 
 
-class SampleDocument(BaseModel):
-    """A sampled document"""
-    doc_id: str
-    content: Dict[str, Any]
-    stratum: Optional[str] = Field(default=None, description="Which stratum this came from")
-    relevance_score: Optional[float] = None
-    source_tool: Optional[str] = Field(default=None, description="MCP tool that provided this sample")
-
-
-class SamplerOutput(BaseModel):
-    """Output from Sampler sub-agent"""
-    samples: List[SampleDocument]
-    strata_coverage: Dict[str, int] = Field(description="Count of samples per stratum")
-    sampling_strategy: str
-    total_sampled: int
 
 
 class Finding(BaseModel):
@@ -305,6 +289,9 @@ class ResearchAgentState(TypedDict):
     needs_full_scan: bool  # Flag: total > fetched, scanner needed
     last_successful_tool_args: Dict[str, Any]  # Saved args for scanner to reuse
 
+    # === User Preferences (agent instructions from UI) ===
+    user_preferences: Optional[str]  # User's custom instructions for the agent
+
 
 # ============================================================================
 # Helper Functions
@@ -316,7 +303,8 @@ def create_initial_state(
     llm_provider: Optional[str] = None,
     llm_model: Optional[str] = None,
     max_iterations: int = 10,
-    enabled_tools: Optional[List[str]] = None
+    enabled_tools: Optional[List[str]] = None,
+    user_preferences: Optional[str] = None
 ) -> ResearchAgentState:
     """Create initial state for a new research session"""
     return ResearchAgentState(
@@ -358,5 +346,6 @@ def create_initial_state(
         total_docs_available=0,
         docs_fetched=0,
         needs_full_scan=False,
-        last_successful_tool_args={}
+        last_successful_tool_args={},
+        user_preferences=user_preferences
     )

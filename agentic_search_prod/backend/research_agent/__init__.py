@@ -10,7 +10,6 @@ Sub-Agents:
 - Perspective: Generates diverse research angles
 - Aggregator: Computes dataset-wide statistics via OpenSearch aggregations
 - Scanner: Iterates through large result sets in batches
-- Sampler: Gets representative samples across categories
 - Extractor: Extracts structured facts from documents
 - Synthesizer: Combines findings into coherent narrative
 - Validator: Checks findings for accuracy and contradictions

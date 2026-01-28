@@ -20,6 +20,7 @@ from rapidfuzz import fuzz
 from text_search import text_search_with_filters
 from query_classifier import classify_search_text
 from document_merge import get_merged_documents_batch
+from pagination import create_pit, delete_pit, parse_search_after, apply_pagination_to_search, build_pagination_metadata
 
 # Configure logging
 logging.basicConfig(
@@ -131,6 +132,9 @@ date_histogram: JSON string - '{{"field": "event_conclusion_date", "interval": "
 top_n: int - max buckets (default 20)
 top_n_per_group: int - nested buckets (default 5)
 samples_per_bucket: int - sample docs per bucket (default 0)
+page_size: int - docs per page (default 10, max 100) for pagination
+search_after: str - JSON array of sort values from previous response's pagination.search_after
+pit_id: str - PIT ID from previous response's pagination.pit_id (reuses existing PIT)
 </parameters>
 
 <date_formats>
@@ -170,6 +174,10 @@ Filter + samples: filters='{{"year": 2023}}', group_by="country", samples_per_bu
 
 Fallback search + group: fallback_search="tech summit", group_by="country"
 Fallback search + filter: fallback_search="annual conference", filters='{{"year": 2023}}'
+
+Pagination (first page): filters='{{"country": "India"}}', page_size=50
+Pagination (next page): filters='{{"country": "India"}}', page_size=50, search_after='["RID050"]'
+Pagination (with PIT): filters='{{"country": "India"}}', page_size=50, search_after='["RID100"]', pit_id="abc..."
 </examples>
 
 <rules>
@@ -183,6 +191,7 @@ status: "success" | "empty_query" | "no_results"
 mode: "filter_only" | "aggregation" | "search"
 aggregations: group_by buckets, date_histogram
 documents: matching documents
+pagination: {{total_hits, search_after, pit_id, has_more, page_size}} - use search_after + pit_id for next page
 </response>
 """
 
@@ -341,7 +350,10 @@ async def analyze_events_by_conclusion(
     date_histogram: Optional[str] = None,
     top_n: int = 20,
     top_n_per_group: int = 5,
-    samples_per_bucket: int = SAMPLES_PER_BUCKET_DEFAULT
+    samples_per_bucket: int = SAMPLES_PER_BUCKET_DEFAULT,
+    page_size: int = MAX_DOCUMENTS,
+    search_after: Optional[str] = None,
+    pit_id: Optional[str] = None
 ) -> ToolResult:
     """
     Analyze events by conclusion date with filtering, grouping, and aggregations.
@@ -381,6 +393,33 @@ async def analyze_events_by_conclusion(
             return ToolResult(content=[], structured_content={
                 "error": f"Invalid filters JSON: {e}"
             })
+
+    # ===== PARSE & VALIDATE PAGINATION PARAMS =====
+
+    # Clamp page_size to [1, 100]
+    page_size = max(1, min(100, page_size))
+
+    # Parse search_after
+    parsed_search_after = None
+    if search_after:
+        try:
+            parsed_search_after = parse_search_after(search_after)
+        except ValueError as e:
+            return ToolResult(content=[], structured_content={
+                "error": str(e)
+            })
+
+    # Auto-create PIT when search_after is provided without pit_id
+    active_pit_id = pit_id
+    if parsed_search_after and not active_pit_id:
+        try:
+            active_pit_id = await create_pit(opensearch_request, INDEX_NAME)
+        except Exception as e:
+            return ToolResult(content=[], structured_content={
+                "error": f"Failed to create PIT for pagination: {str(e)}"
+            })
+
+    logger.info(f"Pagination params: page_size={page_size}, search_after={'set' if parsed_search_after else 'none'}, pit_id={'set' if active_pit_id else 'none'}")
 
     # ===== CLASSIFY FALLBACK_SEARCH (if provided) =====
     classification_result = None
@@ -636,8 +675,9 @@ async def analyze_events_by_conclusion(
 
     has_filters = bool(filter_clauses) or bool(search_terms)  # Include search_terms as they came from filters
     has_aggregation = bool(group_by_fields or parsed_date_histogram)
+    has_pagination = bool(parsed_search_after) or (page_size != MAX_DOCUMENTS)
 
-    if not has_filters and not has_aggregation:
+    if not has_filters and not has_aggregation and not has_pagination:
         return ToolResult(content=[], structured_content={
             "status": "empty_query",
             "error": "Query is empty - specify filter or aggregation",
@@ -672,8 +712,10 @@ async def analyze_events_by_conclusion(
             opensearch_request=opensearch_request,
             index_name=INDEX_NAME,
             unique_id_field=UNIQUE_ID_FIELD,
-            max_results=MAX_DOCUMENTS,
-            source_fields=RESULT_FIELDS
+            max_results=page_size,
+            source_fields=RESULT_FIELDS,
+            pit_id=active_pit_id,
+            search_after=parsed_search_after
         )
 
         if search_result["status"] == "success":
@@ -713,7 +755,8 @@ async def analyze_events_by_conclusion(
                 "data_context": search_data_context,
                 "documents": search_docs,
                 "warnings": warnings,
-                "match_metadata": match_metadata
+                "match_metadata": match_metadata,
+                "pagination": search_result.get("pagination")
             })
         else:
             # Text search also returned no results
@@ -727,7 +770,8 @@ async def analyze_events_by_conclusion(
                 },
                 "error": f"No results found for search: '{' '.join(search_terms)}'",
                 "warnings": warnings,
-                "match_metadata": match_metadata
+                "match_metadata": match_metadata,
+                "pagination": search_result.get("pagination")
             })
 
     # ===== BUILD OPENSEARCH QUERY =====
@@ -740,7 +784,7 @@ async def analyze_events_by_conclusion(
     doc_fields = RESULT_FIELDS
 
     # Skip top-level docs when samples_per_bucket is enabled with group_by (avoid redundancy)
-    top_level_doc_size = 0 if (samples_per_bucket > 0 and group_by_fields) else MAX_DOCUMENTS
+    top_level_doc_size = 0 if (samples_per_bucket > 0 and group_by_fields) else page_size
 
     search_body: Dict[str, Any] = {
         "query": query_body,
@@ -863,10 +907,21 @@ async def analyze_events_by_conclusion(
                 if len(auto_agg_fields) >= MAX_AUTO_AGGS:
                     break
 
+    # ===== ADD DETERMINISTIC SORT + PIT PAGINATION =====
+
+    # Always add deterministic sort for consistent pagination
+    search_body["sort"] = [{UNIQUE_ID_FIELD: {"order": "asc"}}]
+
+    # Apply PIT-based pagination if active
+    search_url = f"{INDEX_NAME}/_search"
+    if active_pit_id:
+        apply_pagination_to_search(search_body, active_pit_id, parsed_search_after)
+        search_url = "_search"
+
     # ===== EXECUTE SEARCH =====
 
     try:
-        data = await opensearch_request("POST", f"{INDEX_NAME}/_search", search_body)
+        data = await opensearch_request("POST", search_url, search_body)
     except Exception as e:
         return ToolResult(content=[], structured_content={
             "error": f"Search failed: {str(e)}"
@@ -909,6 +964,15 @@ async def analyze_events_by_conclusion(
 
     # Extract documents from response
     hits = data.get("hits", {}).get("hits", [])
+
+    # Build pagination metadata from raw hits
+    pagination = build_pagination_metadata(hits, total_hits, active_pit_id, page_size)
+
+    # Auto-cleanup PIT when no more pages (prevents resource leak)
+    if active_pit_id and not pagination.get("has_more", True):
+        await delete_pit(opensearch_request, active_pit_id)
+        pagination["pit_id"] = None  # Signal PIT is closed
+
     collapsed_documents = [h["_source"] for h in hits]
 
     # Merge all documents per RID (combines duplicates into single document)
@@ -1093,7 +1157,8 @@ async def analyze_events_by_conclusion(
         "data_context": data_context,
         "aggregations": aggregations if not filter_only_mode else auto_aggregations,  # Include auto-aggregations for filter-only
         "warnings": warnings,
-        "chart_config": chart_config  # Always include chart_config
+        "chart_config": chart_config,  # Always include chart_config
+        "pagination": pagination
     }
 
     # Add documents to response

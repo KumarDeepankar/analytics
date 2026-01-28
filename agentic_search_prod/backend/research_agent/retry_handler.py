@@ -68,7 +68,7 @@ def reduce_sub_agent_arguments(agent_name: str, arguments: Dict[str, Any]) -> Di
     Reduce arguments for a specific sub-agent based on its type.
 
     Args:
-        agent_name: Name of the sub-agent (scanner, aggregator, sampler, etc.)
+        agent_name: Name of the sub-agent (scanner, aggregator, etc.)
         arguments: Original sub-agent arguments
 
     Returns:
@@ -100,13 +100,6 @@ def reduce_sub_agent_arguments(agent_name: str, arguments: Dict[str, Any]) -> Di
             original = modified["samples_per_bucket"]
             modified["samples_per_bucket"] = max(MIN_VALUES["samples_per_bucket"], original // REDUCTION_FACTOR)
             logger.info(f"Aggregator samples_per_bucket reduced: {original} -> {modified['samples_per_bucket']}")
-
-    elif agent_name == "sampler":
-        # Reduce sampler parameters
-        if "samples_per_stratum" in modified:
-            original = modified["samples_per_stratum"]
-            modified["samples_per_stratum"] = max(1, original // REDUCTION_FACTOR)
-            logger.info(f"Sampler samples_per_stratum reduced: {original} -> {modified['samples_per_stratum']}")
 
     elif agent_name == "synthesizer":
         # Synthesizer works on findings - we can limit findings passed

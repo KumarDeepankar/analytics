@@ -27,6 +27,10 @@ DEFAULT_RESEARCH_MODEL = os.getenv("RESEARCH_LLM_MODEL", "claude-sonnet-4-202505
 # Parallel execution
 MAX_PARALLEL_SUB_AGENTS = int(os.getenv("RESEARCH_MAX_PARALLEL_AGENTS", "5"))
 
+# Timeout for individual sub-agent or tool calls (seconds)
+SUB_AGENT_TIMEOUT = int(os.getenv("RESEARCH_SUB_AGENT_TIMEOUT", "120"))
+TOOL_CALL_TIMEOUT = int(os.getenv("RESEARCH_TOOL_CALL_TIMEOUT", "120"))
+
 # Memory management
 MAX_FINDINGS_BEFORE_COMPRESSION = int(os.getenv("RESEARCH_MAX_FINDINGS", "200"))
 COMPRESSION_TARGET_FINDINGS = int(os.getenv("RESEARCH_COMPRESSION_TARGET", "50"))
@@ -59,12 +63,6 @@ SUB_AGENT_REGISTRY: Dict[str, Dict[str, Any]] = {
         "use_when": "Need exhaustive analysis of large document sets",
         "speed": "slow",
         "cost": "high"
-    },
-    "sampler": {
-        "description": "Gets representative samples across categories using stratified sampling",
-        "use_when": "Need diverse examples, not just top matches",
-        "speed": "medium",
-        "cost": "medium"
     },
     "extractor": {
         "description": "Extracts structured facts from a batch of documents",

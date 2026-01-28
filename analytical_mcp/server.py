@@ -106,6 +106,15 @@ async def opensearch_request(method: str, path: str, body: Optional[dict] = None
                         error_text = await response.text()
                         raise Exception(f"OpenSearch error ({response.status}): {error_text}")
 
+            elif method == "DELETE":
+                headers = {"Content-Type": "application/json"}
+                async with session.delete(url, json=body, headers=headers, auth=auth) as response:
+                    if response.status in [200, 201]:
+                        return await response.json()
+                    else:
+                        error_text = await response.text()
+                        raise Exception(f"OpenSearch error ({response.status}): {error_text}")
+
     except aiohttp.ClientError as e:
         logger.error(f"HTTP request failed: {e}")
         raise Exception(f"Failed to connect to OpenSearch at {OPENSEARCH_URL}: {str(e)}")

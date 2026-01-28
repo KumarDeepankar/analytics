@@ -91,7 +91,7 @@ Return a JSON object:
     {{
       "gap_description": "What is missing",
       "importance": "high|medium|low",
-      "suggested_agent": "aggregator|scanner|sampler|extractor",
+      "suggested_agent": "aggregator|scanner|extractor",
       "suggested_params": {{"key": "value"}}
     }}
   ],

@@ -15,11 +15,9 @@ THREE TYPES OF CALLS:
    - Use for: aggregations, top N results, quick stats
    - Example: {"tool": "analyze_events", "arguments": {"group_by": "country", "top_n": 10}}
 
-2. sub_agent_calls for BATCH PROCESSING (scanner/sampler):
+2. sub_agent_calls for BATCH PROCESSING (scanner):
    - scanner: Exhaustive document analysis in batches (for 100+ docs)
      {"agent_name": "scanner", "arguments": {"tool_name": "X", "tool_args": {...}, "batch_size": 100, "max_batches": 5}}
-   - sampler: Get representative samples across categories
-     {"agent_name": "sampler", "arguments": {"tool_name": "X", "tool_args": {"group_by": "field", "samples_per_bucket": 3}}}
 
 3. sub_agent_calls for LLM PROCESSING:
    - decomposer: Breaks query into sub-questions
@@ -27,13 +25,13 @@ THREE TYPES OF CALLS:
 
 WORKFLOW:
 1. decomposer (optional) for complex queries
-2. tool_calls for quick aggregations OR scanner/sampler for exhaustive analysis
+2. tool_calls for quick aggregations OR scanner for exhaustive analysis
 3. synthesizer when you have data
 
 CRITICAL: Call synthesizer only when Aggregations > 0."""
 
 
-def create_initial_plan_prompt(query: str, enabled_tools: list, tool_descriptions: str = "") -> str:
+def create_initial_plan_prompt(query: str, enabled_tools: list, tool_descriptions: str = "", user_preferences: str = None) -> str:
     """Create prompt for initial research planning - uses direct tool_calls for data fetching"""
     tools_list = ", ".join(enabled_tools) if enabled_tools else "No tools available"
     primary_tool = enabled_tools[0] if enabled_tools else "unknown_tool"
@@ -49,6 +47,19 @@ def create_initial_plan_prompt(query: str, enabled_tools: list, tool_description
 ---
 """
 
+    # User preferences section (agent instructions from UI)
+    preferences_section = ""
+    if user_preferences and user_preferences.strip():
+        preferences_section = f"""
+# User Preferences
+
+The user has specified the following preferences. Apply these to your research approach and output:
+
+{user_preferences}
+
+---
+"""
+
     return f"""# Query
 
 {query}
@@ -56,7 +67,7 @@ def create_initial_plan_prompt(query: str, enabled_tools: list, tool_description
 # Available Data Tools
 
 {tools_list}
-{tool_section}
+{tool_section}{preferences_section}
 # Task
 
 Create INITIAL research plan. Return JSON:
@@ -68,10 +79,18 @@ Create INITIAL research plan. Return JSON:
     {{"agent_name": "decomposer", "arguments": {{"query": "{query}"}}, "reasoning": "Break down query"}}
   ],
   "tool_calls": [
-    {{"tool": "{primary_tool}", "arguments": {{"group_by": "FIELD_FROM_SCHEMA", "top_n": 10}}, "reasoning": "Get distribution"}}
+    {{"tool": "{primary_tool}", "arguments": {{"filters": "{{\\"FIELD\\": \\"VALUE\\"}}", "group_by": "FIELD_FROM_SCHEMA", "top_n": 10}}, "reasoning": "Get distribution"}}
   ]
 }}
 ```
+
+FILTER EXTRACTION (CRITICAL - do this FIRST):
+- Extract ANY entity mentioned in the query as a filter: country, theme, year, title, etc.
+- "India events" → filters='{{"country": "India"}}'
+- "AI events in 2023" → filters='{{"event_theme": "Artificial Intelligence", "year": 2023}}'
+- "Japan cloud events" → filters='{{"country": "Japan", "event_theme": "Cloud"}}'
+- If NO specific entity is mentioned, omit filters and use only group_by
+- ALWAYS include filters when the query mentions a specific country, theme, year, or title
 
 RULES:
 - sub_agent_calls: ONLY decomposer or perspective in initial plan (for query analysis)
@@ -86,7 +105,8 @@ def create_planner_prompt(
     current_state: dict,
     available_agents: list,
     enabled_tools: list,
-    tool_descriptions: str = ""
+    tool_descriptions: str = "",
+    user_preferences: str = None
 ) -> str:
     """Create prompt for subsequent planning decisions - uses direct tool_calls for data fetching"""
     state_summary = _format_state_summary(current_state)
@@ -104,6 +124,19 @@ def create_planner_prompt(
 ---
 """
 
+    # User preferences section (agent instructions from UI)
+    preferences_section = ""
+    if user_preferences and user_preferences.strip():
+        preferences_section = f"""
+# User Preferences
+
+The user has specified the following preferences. Apply these to your research approach and output:
+
+{user_preferences}
+
+---
+"""
+
     return f"""# Query
 
 {query}
@@ -115,7 +148,7 @@ def create_planner_prompt(
 # Available Tools
 
 {tools_list}
-{tool_section}
+{tool_section}{preferences_section}
 # Task
 
 Decide next action. Return JSON:

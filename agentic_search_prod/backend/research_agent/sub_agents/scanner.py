@@ -14,7 +14,7 @@ import logging
 
 from .base import SubAgent, SubAgentContext
 from ..state_definition import Finding, ScannerOutput, FindingConfidence
-from ..utils import extract_documents_from_tool_result
+from ..utils import extract_documents_from_tool_result, parse_mcp_structured_content
 from ..source_config import get_field_value
 
 logger = logging.getLogger(__name__)
@@ -91,19 +91,36 @@ class ScannerAgent(SubAgent[ScannerInput, ScannerOutput]):
             logger.warning(f"DEBUG Scanner using input tool_args: {base_tool_args}")
         elif context.last_successful_tool_args:
             base_tool_args = context.last_successful_tool_args.copy()
-            # Remove pagination args - scanner handles its own
-            base_tool_args.pop("top_n", None)
-            base_tool_args.pop("size", None)
-            base_tool_args.pop("offset", None)
             logger.warning(f"DEBUG Scanner using context tool_args: {base_tool_args}")
         else:
             base_tool_args = {}
             logger.warning("DEBUG Scanner: No tool_args available!")
 
-        # If using group_by, add samples_per_bucket to get actual documents
-        if base_tool_args.get("group_by") and not base_tool_args.get("samples_per_bucket"):
-            base_tool_args["samples_per_bucket"] = 20
-            logger.warning(f"DEBUG Scanner added samples_per_bucket, final args: {base_tool_args}")
+        # Determine scan mode based on whether group_by was explicitly provided
+        # by the planner (in input_data.tool_args) vs inherited from context.
+        explicit_group_by = bool(input_data.tool_args and input_data.tool_args.get("group_by"))
+
+        # Always strip old pagination/sizing args — scanner manages its own
+        for key in ["top_n", "top_n_per_group", "size", "offset",
+                     "search_after", "pit_id", "page_size"]:
+            base_tool_args.pop(key, None)
+
+        if explicit_group_by:
+            # AGGREGATION SAMPLES MODE: planner explicitly wants grouped docs.
+            # Use group_by + samples_per_bucket for representative coverage.
+            # Pagination won't work (size=0), so single-batch fetch.
+            scan_mode = "aggregation_samples"
+            if not base_tool_args.get("samples_per_bucket"):
+                base_tool_args["samples_per_bucket"] = 20
+            logger.warning(f"DEBUG Scanner mode=aggregation_samples, args: {base_tool_args}")
+        else:
+            # PAGINATION MODE: strip group_by (inherited from context), use
+            # flat filter-only queries with page_size + search_after for
+            # exhaustive document-level iteration.
+            scan_mode = "pagination"
+            base_tool_args.pop("group_by", None)
+            base_tool_args.pop("samples_per_bucket", None)
+            logger.warning(f"DEBUG Scanner mode=pagination, args: {base_tool_args}")
 
         # Batch processing parameters
         batch_size = input_data.batch_size
@@ -127,66 +144,135 @@ class ScannerAgent(SubAgent[ScannerInput, ScannerOutput]):
         all_docs: List[Dict[str, Any]] = []
         all_findings: List[Finding] = []
         batches_processed = 0
+        seen_ids: set = set()  # Cross-batch deduplication
 
-        # Process in batches with pagination
-        # Note: Not all MCP tools support size/offset, so we only use top_n
-        for batch_num in range(max_batches):
-            # Build batch-specific tool args
+        # Pagination state - tracks search_after/pit_id across batches per tool
+        tool_pagination: Dict[str, Dict[str, Any]] = {
+            tool_name: {"search_after": None, "pit_id": None, "has_more": True}
+            for tool_name in tools_to_query
+        }
+
+        # ===== BATCH PROCESSING =====
+        # Two modes:
+        #   pagination:            page_size + search_after, multi-batch
+        #   aggregation_samples:   group_by + samples_per_bucket, single batch
+
+        if scan_mode == "aggregation_samples":
+            # Single-batch fetch via aggregation samples
+            logger.warning(f"DEBUG Scanner aggregation_samples: single batch fetch")
             batch_args = base_tool_args.copy()
-            # Use top_n for batch size (most tools support this)
-            batch_args["top_n"] = batch_size
-
-            logger.warning(f"DEBUG Scanner batch {batch_num + 1}/{max_batches}: top_n={batch_size}")
-
-            # Fetch from all tools for this batch
-            batch_docs: List[Dict[str, Any]] = []
 
             for tool_name in tools_to_query:
                 try:
                     logger.warning(f"DEBUG Scanner calling {tool_name} with args: {batch_args}")
                     result = await context.mcp_tool_client.call_tool(tool_name, batch_args)
-                    logger.warning(f"DEBUG Scanner raw result keys: {list(result.keys()) if isinstance(result, dict) else type(result)}")
-                    # Log deeper structure
-                    if isinstance(result, dict):
-                        inner_result = result.get("result", {})
-                        if isinstance(inner_result, dict):
-                            logger.warning(f"DEBUG Scanner result.result keys: {list(inner_result.keys())}")
-                            # Check content structure
-                            content = inner_result.get("content")
-                            if content:
-                                logger.warning(f"DEBUG Scanner content type: {type(content)}, len: {len(content) if isinstance(content, (list, str)) else 'N/A'}")
-                                if isinstance(content, list) and len(content) > 0:
-                                    first_item = content[0]
-                                    logger.warning(f"DEBUG Scanner content[0] type: {type(first_item)}, keys: {list(first_item.keys()) if isinstance(first_item, dict) else 'N/A'}")
                     docs = extract_documents_from_tool_result(result, tool_name)
-                    logger.warning(f"DEBUG Scanner parsed {len(docs)} docs from {tool_name}")
-                    batch_docs.extend(docs)
-                    logger.info(f"Batch {batch_num + 1}: Got {len(docs)} docs from {tool_name}")
+                    logger.warning(f"DEBUG Scanner parsed {len(docs)} docs from {tool_name} (aggregation_samples)")
+
+                    for doc in docs:
+                        doc_id = doc.get("id", "")
+                        if doc_id and doc_id not in seen_ids:
+                            seen_ids.add(doc_id)
+                            all_docs.append(doc)
+                        elif not doc_id:
+                            all_docs.append(doc)
                 except Exception as e:
-                    logger.warning(f"Tool {tool_name} failed in batch {batch_num + 1}: {e}")
+                    logger.warning(f"Tool {tool_name} failed: {e}")
 
-            batches_processed += 1
+            batches_processed = 1
 
-            # Stop if no more documents
-            if not batch_docs:
-                logger.info(f"No more documents at batch {batch_num + 1}, stopping")
-                break
+            # Extract findings from all docs
+            if all_docs:
+                batch_findings = await self._extract_findings(
+                    docs=all_docs,
+                    extraction_focus=input_data.extraction_focus,
+                    sub_questions=input_data.sub_questions,
+                    context=context
+                )
+                all_findings.extend(batch_findings)
 
-            all_docs.extend(batch_docs)
+        else:
+            # Pagination mode: iterate with page_size + search_after
+            for batch_num in range(max_batches):
+                batch_args = base_tool_args.copy()
+                batch_args["page_size"] = batch_size
 
-            # Extract findings from this batch
-            batch_findings = await self._extract_findings(
-                docs=batch_docs,
-                extraction_focus=input_data.extraction_focus,
-                sub_questions=input_data.sub_questions,
-                context=context
-            )
-            all_findings.extend(batch_findings)
+                logger.warning(f"DEBUG Scanner batch {batch_num + 1}/{max_batches}: page_size={batch_size}")
 
-            # Stop if batch returned fewer documents than requested (end of data)
-            if len(batch_docs) < batch_size:
-                logger.info(f"Batch {batch_num + 1} returned {len(batch_docs)} < {batch_size}, end of data")
-                break
+                batch_docs: List[Dict[str, Any]] = []
+                any_tool_has_more = False
+
+                for tool_name in tools_to_query:
+                    tool_pag = tool_pagination[tool_name]
+
+                    if not tool_pag["has_more"]:
+                        logger.info(f"Tool {tool_name} has no more results, skipping")
+                        continue
+
+                    # Add pagination state from previous batch
+                    tool_batch_args = batch_args.copy()
+                    if tool_pag["search_after"]:
+                        tool_batch_args["search_after"] = tool_pag["search_after"]
+                    if tool_pag["pit_id"]:
+                        tool_batch_args["pit_id"] = tool_pag["pit_id"]
+
+                    try:
+                        logger.warning(f"DEBUG Scanner calling {tool_name} with args: {tool_batch_args}")
+                        result = await context.mcp_tool_client.call_tool(tool_name, tool_batch_args)
+
+                        # Extract pagination metadata from response
+                        structured_content = parse_mcp_structured_content(result)
+                        pagination_meta = structured_content.get("pagination", {}) if structured_content else {}
+
+                        if pagination_meta:
+                            tool_pag["search_after"] = pagination_meta.get("search_after")
+                            tool_pag["pit_id"] = pagination_meta.get("pit_id")
+                            tool_pag["has_more"] = pagination_meta.get("has_more", False)
+                            logger.warning(f"DEBUG Scanner pagination from {tool_name}: has_more={tool_pag['has_more']}, search_after={tool_pag['search_after']}")
+                        else:
+                            tool_pag["has_more"] = False
+
+                        if tool_pag["has_more"]:
+                            any_tool_has_more = True
+
+                        docs = extract_documents_from_tool_result(result, tool_name)
+                        logger.warning(f"DEBUG Scanner parsed {len(docs)} docs from {tool_name}")
+
+                        # Deduplicate across batches
+                        new_docs = []
+                        for doc in docs:
+                            doc_id = doc.get("id", "")
+                            if doc_id and doc_id not in seen_ids:
+                                seen_ids.add(doc_id)
+                                new_docs.append(doc)
+                            elif not doc_id:
+                                new_docs.append(doc)
+
+                        batch_docs.extend(new_docs)
+                        logger.info(f"Batch {batch_num + 1}: Got {len(new_docs)} unique docs from {tool_name} ({len(docs) - len(new_docs)} duplicates skipped)")
+                    except Exception as e:
+                        logger.warning(f"Tool {tool_name} failed in batch {batch_num + 1}: {e}")
+                        tool_pag["has_more"] = False
+
+                batches_processed += 1
+
+                if not batch_docs:
+                    logger.info(f"No more documents at batch {batch_num + 1}, stopping")
+                    break
+
+                all_docs.extend(batch_docs)
+
+                batch_findings = await self._extract_findings(
+                    docs=batch_docs,
+                    extraction_focus=input_data.extraction_focus,
+                    sub_questions=input_data.sub_questions,
+                    context=context
+                )
+                all_findings.extend(batch_findings)
+
+                if not any_tool_has_more:
+                    logger.info(f"All tools exhausted after batch {batch_num + 1}")
+                    break
 
         # Collect unique themes
         all_themes = set()
@@ -255,10 +341,10 @@ class ScannerAgent(SubAgent[ScannerInput, ScannerOutput]):
         if not docs:
             return []
 
-        # Format documents for LLM
+        # Format documents for LLM (process full batch)
         docs_text = "\n\n".join([
             f"Document {i+1} (ID: {doc['id']}):\n{self._format_content(doc['content'])}"
-            for i, doc in enumerate(docs[:20])  # Limit to 20 docs per LLM call
+            for i, doc in enumerate(docs)
         ])
 
         focus_text = extraction_focus if extraction_focus else "key findings, patterns, and insights"

@@ -37,6 +37,10 @@ class SynthesizerInput(BaseModel):
         default=True,
         description="Whether to include research methodology section"
     )
+    user_preferences: Optional[str] = Field(
+        default=None,
+        description="User's custom agent instructions to apply to the report"
+    )
 
 
 class SynthesizerAgent(SubAgent[SynthesizerInput, SynthesizerOutput]):
@@ -97,8 +101,21 @@ class SynthesizerAgent(SubAgent[SynthesizerInput, SynthesizerOutput]):
         # Format aggregations simply
         agg_text = self._format_aggregations(input_data.aggregation_results)
 
+        # Format findings from document extraction
+        findings_text = self._format_findings(input_data.findings)
+
         # Format sub-questions
         questions_text = self._format_sub_questions(input_data.sub_questions)
+
+        # User preferences section
+        preferences_section = ""
+        if input_data.user_preferences and input_data.user_preferences.strip():
+            preferences_section = f"""
+# User Preferences
+
+{input_data.user_preferences}
+
+"""
 
         return f"""# Query
 
@@ -108,10 +125,14 @@ class SynthesizerAgent(SubAgent[SynthesizerInput, SynthesizerOutput]):
 
 {agg_text}
 
+# Findings
+
+{findings_text}
+
 # Research Questions
 
 {questions_text}
-
+{preferences_section}
 # Guidelines
 
 Write a research report in markdown format with these sections:
@@ -121,6 +142,8 @@ Write a research report in markdown format with these sections:
 - ## Conclusion (1-2 sentences)
 
 Keep it concise and factual. Use the actual numbers from the data above.
+Incorporate the findings where relevant — they provide document-level evidence.
+Follow the user preferences above if provided.
 
 # Output
 
@@ -159,7 +182,7 @@ Write the markdown report now:"""
             if agg_type == "terms":
                 top_buckets = buckets[:10]
                 bucket_str = ", ".join([
-                    f"{b.get('key', '?')}: {b.get('doc_count', 0)}"
+                    f"{b.get('key', '?')}: {b.get('count', b.get('doc_count', 0))}"
                     for b in top_buckets
                 ])
                 formatted.append(f"Distribution by {field}: {bucket_str}")

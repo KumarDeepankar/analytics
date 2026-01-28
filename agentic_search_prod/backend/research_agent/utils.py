@@ -181,7 +181,7 @@ def extract_chart_config_from_tool_result(tool_result: Dict[str, Any]) -> List[D
 
 def extract_documents_from_tool_result(tool_result: Dict[str, Any], tool_name: str = "unknown") -> List[Dict[str, Any]]:
     """
-    Extract raw documents from MCP tool result for scanner/sampler processing.
+    Extract raw documents from MCP tool result for scanner processing.
 
     Returns list of dicts with id, content, source_tool fields.
     Uses FIELD_MAPPING for ID extraction.

@@ -49,7 +49,8 @@ async def research_interaction_stream(
     enabled_tools: List[str],
     llm_provider: Optional[str] = None,
     llm_model: Optional[str] = None,
-    max_iterations: int = MAX_RESEARCH_ITERATIONS
+    max_iterations: int = MAX_RESEARCH_ITERATIONS,
+    user_preferences: Optional[str] = None
 ) -> AsyncGenerator[str, None]:
     """
     Stream deep research interaction.
@@ -78,7 +79,8 @@ async def research_interaction_stream(
             llm_provider=llm_provider,
             llm_model=llm_model,
             max_iterations=max_iterations,
-            enabled_tools=enabled_tools or []
+            enabled_tools=enabled_tools or [],
+            user_preferences=user_preferences
         )
 
         # Emit research start
@@ -253,12 +255,17 @@ async def research_endpoint(request_body: ResearchRequest, http_request: Request
         sys.path.insert(0, backend_path)
 
     from auth import require_auth, get_jwt_token
+    from conversation_store import get_preferences
 
     # Require authentication
     user = require_auth(http_request)
 
     # Get JWT token for tool access
     jwt_token = get_jwt_token(http_request)
+
+    # Fetch user preferences (agent instructions)
+    user_email = user.get("email")
+    user_preferences = get_preferences(user_email) if user_email else None
 
     # Generate session ID if not provided
     session_id = request_body.session_id or f"research-{str(uuid.uuid4())}"
@@ -276,7 +283,8 @@ async def research_endpoint(request_body: ResearchRequest, http_request: Request
                 enabled_tools=request_body.enabled_tools or [],
                 llm_provider=request_body.llm_provider,
                 llm_model=request_body.llm_model,
-                max_iterations=request_body.max_iterations or MAX_RESEARCH_ITERATIONS
+                max_iterations=request_body.max_iterations or MAX_RESEARCH_ITERATIONS,
+                user_preferences=user_preferences
             )
         ),
         media_type="text/plain"

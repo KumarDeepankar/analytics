@@ -6,7 +6,9 @@ Search fields are configurable via TEXT_SEARCH_FIELDS environment variable.
 """
 import os
 import logging
-from typing import List, Dict, Any, Callable
+from typing import List, Dict, Any, Callable, Optional
+
+from pagination import apply_pagination_to_search, build_pagination_metadata
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +37,9 @@ async def text_search_with_filters(
     index_name: str,
     unique_id_field: str,
     max_results: int = 10,
-    source_fields: List[str] = None
+    source_fields: List[str] = None,
+    pit_id: Optional[str] = None,
+    search_after: Optional[list] = None
 ) -> Dict[str, Any]:
     """
     Execute hybrid query: exact filters + text search for ranking.
@@ -72,7 +76,14 @@ async def text_search_with_filters(
             "unique_hits": 0,
             "documents": [],
             "max_score": 0,
-            "fields_searched": TEXT_SEARCH_FIELDS
+            "fields_searched": TEXT_SEARCH_FIELDS,
+            "pagination": {
+                "total_hits": 0,
+                "search_after": None,
+                "pit_id": None,
+                "has_more": False,
+                "page_size": max_results
+            }
         }
 
     # Build multi_match query for text search
@@ -113,7 +124,8 @@ async def text_search_with_filters(
             }
         },
         "sort": [
-            {"_score": "desc"}
+            {"_score": {"order": "desc"}},
+            {unique_id_field: {"order": "asc"}}
         ],
         "track_total_hits": True
     }
@@ -121,10 +133,16 @@ async def text_search_with_filters(
     if source_fields:
         search_body["_source"] = source_fields
 
+    # Apply PIT-based pagination if provided
+    search_url = f"{index_name}/_search"
+    if pit_id:
+        apply_pagination_to_search(search_body, pit_id, search_after)
+        search_url = "_search"
+
     try:
         logger.info(f"Text search: query='{search_query}', filters={len(filter_clauses)}, fields={TEXT_SEARCH_FIELDS}")
 
-        result = await opensearch_request("POST", f"{index_name}/_search", search_body)
+        result = await opensearch_request("POST", search_url, search_body)
 
         hits = result.get("hits", {})
         total_hits = hits.get("total", {}).get("value", 0)
@@ -141,6 +159,10 @@ async def text_search_with_filters(
 
         logger.info(f"Text search results: {unique_hits} unique hits, max_score={max_score}")
 
+        # Build pagination metadata from raw hits
+        raw_hits = hits.get("hits", [])
+        pagination = build_pagination_metadata(raw_hits, total_hits, pit_id, max_results)
+
         return {
             "status": "success" if documents else "no_results",
             "search_terms": search_terms,
@@ -149,7 +171,8 @@ async def text_search_with_filters(
             "unique_hits": unique_hits,
             "documents": documents,
             "max_score": max_score,
-            "fields_searched": TEXT_SEARCH_FIELDS
+            "fields_searched": TEXT_SEARCH_FIELDS,
+            "pagination": pagination
         }
 
     except Exception as e:
@@ -162,7 +185,14 @@ async def text_search_with_filters(
             "documents": [],
             "max_score": 0,
             "fields_searched": TEXT_SEARCH_FIELDS,
-            "error": str(e)
+            "error": str(e),
+            "pagination": {
+                "total_hits": 0,
+                "search_after": None,
+                "pit_id": None,
+                "has_more": False,
+                "page_size": max_results
+            }
         }
 
 

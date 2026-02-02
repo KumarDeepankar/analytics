@@ -65,6 +65,9 @@ export interface ChatState {
   currentStreamingMessageId: string | null;
   sessionId: string;
   enabledTools: string[];
+  availableTools: Tool[];    // All tools from gateway
+  toolsLoading: boolean;     // True while tools are being fetched
+  toolsError: boolean;       // True if last fetch failed (connection issue)
   selectedProvider: string;
   selectedModel: string;
   theme: Theme;
@@ -162,6 +165,9 @@ export type ChatAction =
   | { type: 'SET_STREAMING_MESSAGE_ID'; payload: string | null }
   | { type: 'UPDATE_STREAMING_CONTENT'; payload: { messageId: string; content: string } }
   | { type: 'SET_ENABLED_TOOLS'; payload: string[] }
+  | { type: 'SET_AVAILABLE_TOOLS'; payload: Tool[] }
+  | { type: 'SET_TOOLS_LOADING'; payload: boolean }
+  | { type: 'SET_TOOLS_ERROR'; payload: boolean }
   | { type: 'SET_LLM_PROVIDER'; payload: string }
   | { type: 'SET_LLM_MODEL'; payload: string }
   | { type: 'SET_THEME'; payload: Theme }

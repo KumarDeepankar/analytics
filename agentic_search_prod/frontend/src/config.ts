@@ -9,3 +9,9 @@ export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localho
 export const getBackendUrl = (path: string) => {
   return `${API_BASE_URL}${path}`;
 };
+
+// UI visibility settings - set to true to hide sections
+export const UI_CONFIG = {
+  hideModelSelector: true,
+  hideToolsSelector: true,
+};

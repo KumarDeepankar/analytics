@@ -98,7 +98,7 @@ export function useStreamingSearch() {
           response = await apiClient.research({
             query,
             session_id: state.sessionId,
-            enabled_tools: state.enabledTools,
+            enabled_tools: state.enabledTools || [],
             llm_provider: state.selectedProvider,
             llm_model: state.selectedModel,
           });
@@ -106,7 +106,7 @@ export function useStreamingSearch() {
           // Quick search mode (default)
           response = await apiClient.search({
             query,
-            enabled_tools: state.enabledTools,
+            enabled_tools: state.enabledTools || [],
             session_id: state.sessionId,
             is_followup: isFollowup,
             conversation_history: conversationHistory.length > 0 ? conversationHistory : undefined,

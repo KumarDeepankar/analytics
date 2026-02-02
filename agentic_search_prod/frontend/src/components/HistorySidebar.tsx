@@ -213,12 +213,44 @@ export function HistorySidebar({ isOpen, onClose, onLoadConversation }: HistoryS
   const formatDate = (dateStr: string) => {
     const date = new Date(dateStr);
     const now = new Date();
-    const diff = now.getTime() - date.getTime();
-    const days = Math.floor(diff / (1000 * 60 * 60 * 24));
+    const diffMs = now.getTime() - date.getTime();
 
-    if (days === 0) return 'Today';
-    if (days === 1) return 'Yesterday';
-    if (days < 7) return `${days} days ago`;
+    // Handle negative diff (future dates) or invalid dates
+    if (diffMs < 0 || isNaN(diffMs)) {
+      return date.toLocaleDateString();
+    }
+
+    const diffSeconds = Math.floor(diffMs / 1000);
+    const diffMinutes = Math.floor(diffSeconds / 60);
+    const diffHours = Math.floor(diffMinutes / 60);
+    const diffDays = Math.floor(diffHours / 24);
+
+    // Less than 1 minute
+    if (diffSeconds < 60) {
+      return 'Just now';
+    }
+
+    // Less than 1 hour
+    if (diffMinutes < 60) {
+      return diffMinutes === 1 ? '1 minute ago' : `${diffMinutes} minutes ago`;
+    }
+
+    // Less than 24 hours
+    if (diffHours < 24) {
+      return diffHours === 1 ? '1 hour ago' : `${diffHours} hours ago`;
+    }
+
+    // Yesterday
+    if (diffDays === 1) {
+      return 'Yesterday';
+    }
+
+    // Less than 7 days
+    if (diffDays < 7) {
+      return `${diffDays} days ago`;
+    }
+
+    // Otherwise show the date
     return date.toLocaleDateString();
   };
 

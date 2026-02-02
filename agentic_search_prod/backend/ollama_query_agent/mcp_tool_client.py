@@ -142,7 +142,7 @@ class MCPToolClient:
             connect=5.0,
             read=30.0,
             write=5.0,
-            pool=2.0
+            pool=30.0  # Wait up to 30s for connection (prevents cascade failures under load)
         )
 
         self.client = httpx.AsyncClient(

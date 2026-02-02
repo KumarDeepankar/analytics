@@ -1,5 +1,5 @@
 import { createContext, useContext, useReducer, type ReactNode } from 'react';
-import type { ChatState, ChatAction, Message, ProcessingStep, Source, ChartConfig, SearchMode } from '../types';
+import type { ChatState, ChatAction, Message, ProcessingStep, Source, ChartConfig, SearchMode, Tool } from '../types';
 
 // Initial state
 const initialState: ChatState = {
@@ -8,6 +8,9 @@ const initialState: ChatState = {
   currentStreamingMessageId: null,
   sessionId: `session_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`,
   enabledTools: [],
+  availableTools: [],
+  toolsLoading: true,   // Start as true - tools need to be fetched
+  toolsError: false,
   selectedProvider: '',
   selectedModel: '',
   theme: 'minimal',
@@ -156,6 +159,25 @@ function chatReducer(state: ChatState, action: ChatAction): ChatState {
         enabledTools: action.payload,
       };
 
+    case 'SET_AVAILABLE_TOOLS':
+      return {
+        ...state,
+        availableTools: action.payload,
+        toolsError: false,  // Clear error on successful load
+      };
+
+    case 'SET_TOOLS_LOADING':
+      return {
+        ...state,
+        toolsLoading: action.payload,
+      };
+
+    case 'SET_TOOLS_ERROR':
+      return {
+        ...state,
+        toolsError: action.payload,
+      };
+
     case 'SET_LLM_PROVIDER':
       return {
         ...state,
@@ -191,6 +213,9 @@ function chatReducer(state: ChatState, action: ChatAction): ChatState {
         ...initialState,
         sessionId: `session_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`,
         enabledTools: state.enabledTools,
+        availableTools: state.availableTools,
+        toolsLoading: state.toolsLoading,
+        toolsError: state.toolsError,
         selectedProvider: state.selectedProvider,
         selectedModel: state.selectedModel,
         theme: state.theme,
@@ -232,6 +257,9 @@ interface ChatContextType {
   setLoading: (loading: boolean) => void;
   setStreamingMessageId: (id: string | null) => void;
   setSearchMode: (mode: SearchMode) => void;
+  setAvailableTools: (tools: Tool[]) => void;
+  setToolsLoading: (loading: boolean) => void;
+  setToolsError: (error: boolean) => void;
   resetChat: () => void;
 }
 
@@ -298,6 +326,18 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     dispatch({ type: 'SET_SEARCH_MODE', payload: mode });
   };
 
+  const setAvailableTools = (tools: Tool[]) => {
+    dispatch({ type: 'SET_AVAILABLE_TOOLS', payload: tools });
+  };
+
+  const setToolsLoading = (loading: boolean) => {
+    dispatch({ type: 'SET_TOOLS_LOADING', payload: loading });
+  };
+
+  const setToolsError = (error: boolean) => {
+    dispatch({ type: 'SET_TOOLS_ERROR', payload: error });
+  };
+
   const value: ChatContextType = {
     state,
     dispatch,
@@ -311,6 +351,9 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     setLoading,
     setStreamingMessageId,
     setSearchMode,
+    setAvailableTools,
+    setToolsLoading,
+    setToolsError,
     resetChat,
   };
 

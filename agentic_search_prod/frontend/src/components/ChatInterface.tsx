@@ -7,7 +7,7 @@ import { useTheme } from '../contexts/ThemeContext';
 import { useChatContext } from '../contexts/ChatContext';
 import { apiClient } from '../services/api';
 import { historyService } from '../services/historyService';
-import { getBackendUrl } from '../config';
+import { getBackendUrl, UI_CONFIG } from '../config';
 import { TRANSITION } from '../styles/animations';
 import { IconButton } from './Button';
 
@@ -25,9 +25,7 @@ export function ChatInterface() {
   const { themeColors } = useTheme();
   const { state, dispatch } = useChatContext();
   const [availableModels, setAvailableModels] = useState<ModelInfo[]>([]);
-  const [availableTools, setAvailableTools] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
-  const [toolsLoading, setToolsLoading] = useState(true);
   const [showModelDropdown, setShowModelDropdown] = useState(false);
   const [showToolsDropdown, setShowToolsDropdown] = useState(false);
   const [toolsNotification, setToolsNotification] = useState<string | null>(null);
@@ -38,6 +36,10 @@ export function ChatInterface() {
   const [unviewedShareCount, setUnviewedShareCount] = useState(0);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const toolsDropdownRef = useRef<HTMLDivElement>(null);
+
+  // Derive tools state from context (with safety checks)
+  const availableTools = state.availableTools || [];
+  const toolsLoading = state.toolsLoading ?? true;
 
   // Close model dropdown when clicking outside
   useEffect(() => {
@@ -159,40 +161,47 @@ export function ChatInterface() {
     loadModels();
   }, [dispatch, state.selectedModel]);
 
-  // Load available tools on mount
+  // Load available tools on mount (runs once)
   useEffect(() => {
+    let isMounted = true;
     async function loadTools() {
+      dispatch({ type: 'SET_TOOLS_LOADING', payload: true });
+      dispatch({ type: 'SET_TOOLS_ERROR', payload: false });
       try {
         const tools = await apiClient.getTools();
+        if (!isMounted) return;
         const toolsList = Array.isArray(tools) ? tools : [];
-        setAvailableTools(toolsList);
-        // Notify if tools empty on initial load
-        if (toolsList.length === 0) {
-          window.dispatchEvent(new CustomEvent('tools-unavailable'));
-        }
+        dispatch({ type: 'SET_AVAILABLE_TOOLS', payload: toolsList });
+        // Set enabled tools to those marked as enabled by default
+        const enabledToolNames = toolsList
+          .filter((t: any) => t.enabled)
+          .map((t: any) => t.name);
+        dispatch({ type: 'SET_ENABLED_TOOLS', payload: enabledToolNames });
       } catch (error) {
-        setAvailableTools([]);
-        window.dispatchEvent(new CustomEvent('tools-unavailable'));
+        if (!isMounted) return;
+        dispatch({ type: 'SET_AVAILABLE_TOOLS', payload: [] });
+        dispatch({ type: 'SET_TOOLS_ERROR', payload: true });
       } finally {
-        setToolsLoading(false);
+        if (isMounted) {
+          dispatch({ type: 'SET_TOOLS_LOADING', payload: false });
+        }
       }
     }
     loadTools();
-  }, []);
+    return () => { isMounted = false; };
+  }, [dispatch]);
 
-  // Polling every 30 seconds + tab visibility refresh (notify if tools empty)
+  // Polling every 30 seconds + tab visibility refresh (silently update state)
   useEffect(() => {
     const checkTools = async () => {
       try {
         await apiClient.refreshTools();
         const tools = await apiClient.getTools();
         const toolsList = Array.isArray(tools) ? tools : [];
-        setAvailableTools(toolsList);
-        if (toolsList.length === 0) {
-          window.dispatchEvent(new CustomEvent('tools-unavailable'));
-        }
+        dispatch({ type: 'SET_AVAILABLE_TOOLS', payload: toolsList });
+        dispatch({ type: 'SET_TOOLS_ERROR', payload: false });
       } catch {
-        window.dispatchEvent(new CustomEvent('tools-unavailable'));
+        dispatch({ type: 'SET_TOOLS_ERROR', payload: true });
       }
     };
 
@@ -206,35 +215,23 @@ export function ChatInterface() {
       clearInterval(interval);
       document.removeEventListener('visibilitychange', handleVisibility);
     };
-  }, []);
+  }, [dispatch]);
 
-  // Listen for tools-unavailable event (fired after conversation turn)
+  // Listen for tools-unavailable event (fired after conversation turn in useStreamingSearch)
+  // This handles mid-session tool loss - shows a brief notification
   useEffect(() => {
     const handleToolsUnavailable = async () => {
-      setToolsNotification('Reconnecting to tools...');
-
-      // Wait 1.5s so user can see the "attempting" message
-      await new Promise(resolve => setTimeout(resolve, 1500));
-
-      try {
-        await apiClient.refreshTools();
-        const tools = await apiClient.getTools();
-        const toolsList = Array.isArray(tools) ? tools : [];
-        setAvailableTools(toolsList);
-        setToolsNotification(
-          toolsList.length > 0
-            ? 'Tools connected!'
-            : 'Unable to connect to tools. Please refresh the tool list or try again shortly.'
-        );
-      } catch {
-        setToolsNotification('Unable to connect to tools. Please refresh the tool list or try again shortly.');
+      // Only show notification for mid-session loss (when user was previously working)
+      // The banner in InputArea handles the persistent warning
+      if (state.messages.length > 0) {
+        setToolsNotification('Connection to tools lost. Check the input area for options.');
+        setTimeout(() => setToolsNotification(null), 4000);
       }
-      setTimeout(() => setToolsNotification(null), 5000);
     };
 
     window.addEventListener('tools-unavailable', handleToolsUnavailable);
     return () => window.removeEventListener('tools-unavailable', handleToolsUnavailable);
-  }, []);
+  }, [state.messages.length]);
 
   // Save conversation when response completes (so feedback can be submitted)
   useEffect(() => {
@@ -248,10 +245,6 @@ export function ChatInterface() {
     return () => window.removeEventListener('save-conversation', handleSaveConversation);
   }, [state.sessionId, state.messages]);
 
-  // Debug log for tools state
-  useEffect(() => {
-
-  }, [toolsLoading, availableTools]);
 
   const handleToolToggle = (toolName: string) => {
     const currentTools = state.enabledTools || [];
@@ -263,16 +256,23 @@ export function ChatInterface() {
   };
 
   const handleRefreshTools = async () => {
-    setToolsLoading(true);
+    dispatch({ type: 'SET_TOOLS_LOADING', payload: true });
+    dispatch({ type: 'SET_TOOLS_ERROR', payload: false });
     try {
       await apiClient.refreshTools();
       const tools = await apiClient.getTools();
-      setAvailableTools(tools);
-
+      const toolsList = Array.isArray(tools) ? tools : [];
+      dispatch({ type: 'SET_AVAILABLE_TOOLS', payload: toolsList });
+      if (toolsList.length > 0) {
+        setToolsNotification('Tools connected!');
+        setTimeout(() => setToolsNotification(null), 3000);
+      }
     } catch (error) {
-
+      dispatch({ type: 'SET_TOOLS_ERROR', payload: true });
+      setToolsNotification('Failed to refresh tools. Please try again.');
+      setTimeout(() => setToolsNotification(null), 5000);
     } finally {
-      setToolsLoading(false);
+      dispatch({ type: 'SET_TOOLS_LOADING', payload: false });
     }
   };
 
@@ -807,7 +807,7 @@ export function ChatInterface() {
           </div>
 
           {/* Model Selector */}
-          <div ref={dropdownRef} style={{ position: 'relative' }}>
+          {!UI_CONFIG.hideModelSelector && <div ref={dropdownRef} style={{ position: 'relative' }}>
             {/* Model Selector Label */}
             <div
               style={{
@@ -969,10 +969,10 @@ export function ChatInterface() {
                 )}
               </>
             )}
-          </div>
+          </div>}
 
           {/* Tools Section */}
-          <div ref={toolsDropdownRef} style={{ position: 'relative', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '2px' }}>
+          {!UI_CONFIG.hideToolsSelector && <div ref={toolsDropdownRef} style={{ position: 'relative', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '2px' }}>
             <div
               style={{
                 fontSize: '9px',
@@ -1160,7 +1160,7 @@ export function ChatInterface() {
                 )}
               </>
             )}
-          </div>
+          </div>}
 
           {/* Logout Section */}
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '2px' }}>

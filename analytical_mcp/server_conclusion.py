@@ -1195,7 +1195,8 @@ async def analyze_events_by_conclusion(
         aggregations,
         group_by_fields,
         parsed_date_histogram,
-        auto_aggregations=auto_aggregations if filter_only_mode else None
+        auto_aggregations=auto_aggregations if filter_only_mode else None,
+        filters_applied=query_context["filters_applied"]
     )
 
     # Build filter_resolution - clear summary of what was actually searched
@@ -1251,7 +1252,8 @@ def _generate_chart_config(
     aggregations: Dict[str, Any],
     group_by_fields: Optional[List[str]],
     date_histogram: Optional[dict],
-    auto_aggregations: Optional[Dict[str, Any]] = None
+    auto_aggregations: Optional[Dict[str, Any]] = None,
+    filters_applied: Optional[Dict[str, Any]] = None
 ) -> List[dict]:
     """
     Generate chart configuration from aggregation results.
@@ -1264,6 +1266,7 @@ def _generate_chart_config(
     - Bar: Default for categorical data
 
     For filter-only mode, uses auto_aggregations (server-side aggregations) for accurate counts.
+    Includes filters_applied for chart display context.
     """
     charts = []
 
@@ -1299,7 +1302,8 @@ def _generate_chart_config(
                 "data": [b["count"] for b in buckets],
                 "aggregation_field": field_name,
                 "multi_level": is_multi_level,
-                "total_records": sum(b["count"] for b in buckets)
+                "total_records": sum(b["count"] for b in buckets),
+                "filters": filters_applied or {}
             })
 
     # Date histogram chart - use area for time series
@@ -1315,7 +1319,8 @@ def _generate_chart_config(
                 "data": [b["count"] for b in buckets],
                 "aggregation_field": "date_histogram",
                 "interval": interval,
-                "total_records": sum(b["count"] for b in buckets)
+                "total_records": sum(b["count"] for b in buckets),
+                "filters": filters_applied or {}
             })
 
     # Filter-only mode: generate charts from auto-aggregations (server-side, accurate counts)
@@ -1331,7 +1336,8 @@ def _generate_chart_config(
                     "data": [b["count"] for b in buckets],
                     "aggregation_field": field,
                     "source": "auto_aggregation",  # Server-side aggregation
-                    "total_records": sum(b["count"] for b in buckets)
+                    "total_records": sum(b["count"] for b in buckets),
+                    "filters": filters_applied or {}
                 })
 
     return charts

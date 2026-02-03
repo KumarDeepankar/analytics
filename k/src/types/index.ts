@@ -23,6 +23,7 @@ export interface ChartConfig {
   seriesField?: string;
   aggregation?: 'sum' | 'avg' | 'count' | 'min' | 'max';
   filters?: Filter[];
+  appliedFilters?: Record<string, unknown>;  // Filters from MCP response for display
   options?: Record<string, unknown>;
 }
 

@@ -27,6 +27,7 @@ export interface SearchResponse {
     xField: string;
     yField?: string;
     aggregation: string;
+    filters?: Record<string, unknown>;
   }>;
   thinkingSteps: Array<{
     node: string;

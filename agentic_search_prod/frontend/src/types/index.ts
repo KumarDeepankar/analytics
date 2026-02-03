@@ -35,6 +35,7 @@ export interface ChartConfig {
   total_records?: number;     // Total count across all categories
   interval?: string;          // For date histograms (year/month/week/day)
   multi_level?: boolean;      // For nested group_by aggregations
+  filters?: Record<string, unknown>; // Applied filters from MCP response
 }
 
 export interface ProcessingStep {

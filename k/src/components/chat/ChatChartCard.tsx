@@ -211,6 +211,19 @@ const ChatChartCard: React.FC<ChatChartCardProps> = ({
           <span className="chart-type-badge">{chart.type}</span>
           <span className="chart-source">{chart.dataSource}</span>
         </div>
+        {chart.appliedFilters && Object.keys(chart.appliedFilters).length > 0 && (
+          <div className="chart-filters-display">
+            <span className="filters-label">Filters:</span>
+            <span className="filters-values">
+              {Object.entries(chart.appliedFilters).map(([key, value], idx) => (
+                <span key={key} className="filter-chip">
+                  {key}: {Array.isArray(value) ? value.join(', ') : String(value)}
+                  {idx < Object.keys(chart.appliedFilters!).length - 1 ? ' | ' : ''}
+                </span>
+              ))}
+            </span>
+          </div>
+        )}
         {isAddedToDashboard ? (
           <button className="add-to-dashboard-btn added" disabled>
             ✓ Added to Dashboard

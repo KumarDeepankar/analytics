@@ -820,7 +820,7 @@ export const ChartDisplay = ({ config, showMetadata = true, chartId, selectedLab
       )}
 
       {/* Chart Metadata Footer - Compact */}
-      {showMetadata && (transformedConfig.aggregation_field || transformedConfig.total_records) && (
+      {showMetadata && (transformedConfig.aggregation_field || transformedConfig.total_records || config.filters) && (
         <div
           style={{
             marginTop: '10px',
@@ -862,6 +862,39 @@ export const ChartDisplay = ({ config, showMetadata = true, chartId, selectedLab
                 <strong style={{ color: themeColors.text, fontWeight: '600' }}>{transformedConfig.total_records.toLocaleString()}</strong> rows
               </span>
             </div>
+          )}
+          {/* Applied Filters Display */}
+          {config.filters && Object.keys(config.filters).length > 0 && (
+            <>
+              {(transformedConfig.aggregation_field || transformedConfig.total_records) && (
+                <div
+                  style={{
+                    width: '1px',
+                    height: '10px',
+                    backgroundColor: themeColors.border,
+                  }}
+                />
+              )}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '4px', flexWrap: 'wrap' }}>
+                <Icon name="search" size={9} color={themeColors.textSecondary} />
+                <span style={{ color: themeColors.textSecondary }}>Filters:</span>
+                {Object.entries(config.filters).map(([key, value], idx, arr) => (
+                  <span
+                    key={key}
+                    style={{
+                      backgroundColor: themeColors.mode === 'dark' ? 'rgba(99, 102, 241, 0.2)' : 'rgba(99, 102, 241, 0.1)',
+                      color: themeColors.mode === 'dark' ? 'rgba(165, 180, 252, 1)' : 'rgba(79, 70, 229, 1)',
+                      padding: '1px 5px',
+                      borderRadius: '3px',
+                      fontSize: '8px',
+                      fontWeight: '500',
+                    }}
+                  >
+                    {key}: {Array.isArray(value) ? value.join(', ') : String(value)}
+                  </span>
+                ))}
+              </div>
+            </>
           )}
         </div>
       )}

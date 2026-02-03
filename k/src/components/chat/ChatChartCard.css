@@ -95,3 +95,31 @@
   background: #95a5a6;
   cursor: default;
 }
+
+.chart-filters-display {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  background: #f8f9fa;
+  border-top: 1px solid #e9ecef;
+  font-size: 12px;
+  flex-wrap: wrap;
+}
+
+.filters-label {
+  color: #6c757d;
+  font-weight: 500;
+}
+
+.filters-values {
+  color: #495057;
+}
+
+.filter-chip {
+  background: #e7f3ff;
+  color: #0066cc;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 11px;
+}

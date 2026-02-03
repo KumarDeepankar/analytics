@@ -131,7 +131,8 @@ const ChatDashboardPage: React.FC = () => {
                 xField: (chartData.x_field as string) || (chartData.xField as string) || 'category',
                 yField: (chartData.y_field as string) || (chartData.yField as string),
                 aggregation: (chartData.aggregation as ChartConfig['aggregation']) || 'count',
-                filters: (chartData.filters as ChartConfig['filters']) || [],
+                filters: [],
+                appliedFilters: (chartData.filters as Record<string, unknown>) || {},
               }));
             },
             onError: (message) => {

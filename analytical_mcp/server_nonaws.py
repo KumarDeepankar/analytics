@@ -1,34 +1,24 @@
 #!/usr/bin/env python3
 """
-Analytical MCP Server - AWS Version (IAM SigV4 Authentication)
+Analytical MCP Server - Main Entry Point
 
-This server uses AWS IAM role-based authentication with SigV4 request signing
-for AWS OpenSearch Service.
+This is the main server file that:
+- Initializes the MCP server and OpenSearch client (shared infrastructure)
+- Imports and registers tools from separate modules
+- Handles startup and metadata loading for all tools
 
-Environment Variables:
-- OPENSEARCH_ENDPOINT: AWS OpenSearch endpoint (e.g., https://xxx.us-east-1.es.amazonaws.com)
-- AWS_REGION: AWS region (default: us-east-1)
-- AWS_SERVICE: Service name - "es" for OpenSearch, "aoss" for Serverless (default: es)
-
-AWS credentials are automatically obtained from:
-- IAM role (EC2 instance profile, ECS task role, Lambda execution role)
-- Environment variables (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY)
-- AWS credentials file (~/.aws/credentials)
-
-For non-AWS OpenSearch with username/password, use server_nonaws.py instead.
+Tools (identical implementation, different index/date field):
+- analyze_events_by_conclusion (server_conclusion.py): Query specific index by event_conclusion_date
+- analyze_all_events (server_tool2.py): Query all indices (events_*) by event_date
 """
 import os
 import logging
+import ssl
 import asyncio
 import time
-import json
 from typing import Optional
 import aiohttp
 from fastmcp import FastMCP
-
-from botocore.session import Session as BotocoreSession
-from botocore.auth import SigV4Auth
-from botocore.awsrequest import AWSRequest
 
 from index_metadata import IndexMetadata
 from input_validator import InputValidator
@@ -63,20 +53,13 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ============================================================================
-# SHARED CONFIGURATION (AWS OpenSearch)
+# SHARED CONFIGURATION
 # ============================================================================
 
-# AWS OpenSearch configuration
-OPENSEARCH_ENDPOINT = os.getenv("OPENSEARCH_ENDPOINT", "")
-AWS_REGION = os.getenv("AWS_REGION", "us-east-1")
-AWS_SERVICE = os.getenv("AWS_SERVICE", "es")  # "es" for OpenSearch, "aoss" for Serverless
-
-# Validate endpoint
-if not OPENSEARCH_ENDPOINT:
-    raise ValueError("OPENSEARCH_ENDPOINT environment variable is required")
-
-# Normalize endpoint (remove trailing slash)
-OPENSEARCH_ENDPOINT = OPENSEARCH_ENDPOINT.rstrip("/")
+# OpenSearch configuration (shared by all tools)
+OPENSEARCH_URL = os.getenv("OPENSEARCH_URL", "http://localhost:9200")
+OPENSEARCH_USERNAME = os.getenv("OPENSEARCH_USERNAME", "admin")
+OPENSEARCH_PASSWORD = os.getenv("OPENSEARCH_PASSWORD", "admin")
 
 
 # ============================================================================
@@ -87,32 +70,30 @@ mcp = FastMCP("Analytical Events Server")
 
 
 # ============================================================================
-# AWS OPENSEARCH CLIENT (SigV4 Authentication)
+# OPENSEARCH CLIENT (Shared Singleton Session with Periodic Refresh)
 # ============================================================================
 
-# Session refresh interval (default: 1 hour) - also refreshes AWS credentials
+# Session refresh interval (default: 1 hour)
 SESSION_REFRESH_HOURS = float(os.getenv("OPENSEARCH_SESSION_REFRESH_HOURS", "1"))
 
 
-class AWSOpenSearchClient:
+class OpenSearchClient:
     """
-    Singleton HTTP client for AWS OpenSearch with IAM SigV4 authentication.
+    Singleton HTTP client for OpenSearch with connection pooling.
 
-    Uses botocore for credential management and request signing.
-    Supports:
-    - IAM roles (EC2 instance profile, ECS task role, Lambda execution role)
-    - Environment credentials (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY)
-    - AWS profiles (~/.aws/credentials)
+    Reuses a single aiohttp.ClientSession across all requests to:
+    - Avoid connection pool exhaustion over time
+    - Reduce overhead of session creation/teardown
+    - Maintain persistent connections for better performance
 
-    Includes periodic session refresh to pick up rotated credentials.
+    Includes periodic session refresh to prevent state accumulation.
     """
 
-    _instance: Optional['AWSOpenSearchClient'] = None
+    _instance: Optional['OpenSearchClient'] = None
     _session: Optional[aiohttp.ClientSession] = None
-    _lock: Optional[asyncio.Lock] = None
-    _session_created_at: Optional[float] = None
-    _request_count: int = 0
-    _botocore_session: Optional[BotocoreSession] = None
+    _lock: Optional[asyncio.Lock] = None  # Lazy init to avoid event loop issues
+    _session_created_at: Optional[float] = None  # Timestamp when session was created
+    _request_count: int = 0  # Track requests for logging
 
     def __new__(cls):
         if cls._instance is None:
@@ -125,66 +106,26 @@ class AWSOpenSearchClient:
             self._lock = asyncio.Lock()
         return self._lock
 
-    def _get_botocore_session(self) -> BotocoreSession:
-        """Get or create botocore session for credential management."""
-        if self._botocore_session is None:
-            self._botocore_session = BotocoreSession()
-        return self._botocore_session
-
-    def _sign_request(self, method: str, url: str, body: Optional[dict] = None) -> dict:
-        """
-        Sign request with AWS SigV4.
-
-        Returns headers dict including Authorization and other required headers.
-        """
-        session = self._get_botocore_session()
-        credentials = session.get_credentials()
-
-        if credentials is None:
-            raise Exception(
-                "No AWS credentials found. Configure IAM role, environment variables "
-                "(AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY), or AWS credentials file."
-            )
-
-        # Freeze credentials (important for assumed roles with session tokens)
-        frozen_credentials = credentials.get_frozen_credentials()
-
-        # Prepare the request body
-        data = json.dumps(body) if body else None
-
-        # Extract host from URL
-        host = url.split("//")[1].split("/")[0]
-
-        # Create AWS request for signing
-        headers = {"Content-Type": "application/json", "Host": host}
-        aws_request = AWSRequest(method=method, url=url, data=data, headers=headers)
-
-        # Sign the request
-        SigV4Auth(frozen_credentials, AWS_SERVICE, AWS_REGION).add_auth(aws_request)
-
-        return dict(aws_request.headers)
-
     def _is_session_expired(self) -> bool:
         """Check if session has exceeded the refresh interval."""
         if self._session_created_at is None:
             return True
+
         age_hours = (time.time() - self._session_created_at) / 3600
         return age_hours >= SESSION_REFRESH_HOURS
 
-    def _is_session_loop_valid(self) -> bool:
-        """Check if session's event loop matches current running loop."""
-        if self._session is None:
-            return False
-        try:
-            current_loop = asyncio.get_running_loop()
-            session_loop = getattr(self._session._connector, '_loop', None)
-            return session_loop is current_loop
-        except RuntimeError:
-            return False
-
     async def _create_session(self) -> aiohttp.ClientSession:
-        """Create aiohttp session (no auth - SigV4 signing done per-request)."""
+        """Create a new aiohttp session with connection pooling."""
+        # SSL context for HTTPS
+        ssl_context = None
+        if OPENSEARCH_URL.startswith("https://"):
+            ssl_context = ssl.create_default_context()
+            ssl_context.check_hostname = False
+            ssl_context.verify_mode = ssl.CERT_NONE
+
+        # Create connector with connection pooling
         connector = aiohttp.TCPConnector(
+            ssl=ssl_context if ssl_context else False,
             limit=100,          # Total connection pool size
             limit_per_host=30,  # Connections per host
             ttl_dns_cache=300,  # DNS cache TTL (5 min)
@@ -192,120 +133,128 @@ class AWSOpenSearchClient:
         )
 
         timeout = aiohttp.ClientTimeout(
-            total=60,      # Total timeout
+            total=60,      # Total timeout (increased from 30s)
             connect=10,    # Connection timeout
             sock_read=30   # Socket read timeout
         )
 
         session = aiohttp.ClientSession(
             connector=connector,
-            timeout=timeout
-            # No auth parameter - SigV4 headers added per request
+            timeout=timeout,
+            auth=aiohttp.BasicAuth(OPENSEARCH_USERNAME, OPENSEARCH_PASSWORD)
         )
 
         self._session_created_at = time.time()
         self._request_count = 0
 
-        # Refresh botocore session to pick up rotated credentials
-        self._botocore_session = None
-
         return session
+
+    def _is_session_loop_valid(self) -> bool:
+        """Check if session's event loop matches current running loop."""
+        if self._session is None:
+            return False
+        try:
+            current_loop = asyncio.get_running_loop()
+            # aiohttp sessions store their loop in _connector._loop
+            session_loop = getattr(self._session._connector, '_loop', None)
+            return session_loop is current_loop
+        except RuntimeError:
+            return False
 
     async def _get_session(self) -> aiohttp.ClientSession:
         """Get or create the shared aiohttp session with periodic refresh."""
-        # Fast path
+        # Fast path: session exists, not closed, not expired, and same event loop
         if (self._session is not None
             and not self._session.closed
             and not self._is_session_expired()
             and self._is_session_loop_valid()):
             return self._session
 
-        # Slow path
+        # Slow path: need to create or refresh session
         async with self._get_lock():
+            # Double-check after acquiring lock
             needs_refresh = self._is_session_expired()
             loop_mismatch = not self._is_session_loop_valid()
 
             if self._session is not None and not self._session.closed:
                 if loop_mismatch:
+                    # Session created in different event loop - must recreate
                     logger.warning("OpenSearch session event loop mismatch, recreating session")
                     try:
                         await self._session.close()
                     except Exception:
-                        pass
+                        pass  # Ignore errors closing session from different loop
                     self._session = None
                 elif needs_refresh:
+                    # Session expired, close and recreate
                     age_hours = (time.time() - self._session_created_at) / 3600 if self._session_created_at else 0
                     logger.info(
-                        f"Refreshing AWS OpenSearch session after {age_hours:.1f} hours "
+                        f"Refreshing OpenSearch session after {age_hours:.1f} hours "
                         f"({self._request_count} requests served)"
                     )
                     await self._session.close()
                     self._session = None
                 else:
+                    # Another coroutine already created/refreshed the session
                     return self._session
 
             if self._session is None or self._session.closed or loop_mismatch:
+                # Clean up old session reference if needed
                 if self._session is not None and self._session.closed:
                     logger.warning("OpenSearch session was closed unexpectedly, creating new one")
                     self._session = None
 
                 self._session = await self._create_session()
                 logger.info(
-                    f"Created new AWS OpenSearch client session with SigV4 auth "
+                    f"Created new OpenSearch client session "
                     f"(refresh interval: {SESSION_REFRESH_HOURS} hours)"
                 )
 
             return self._session
 
     async def request(self, method: str, path: str, body: Optional[dict] = None) -> dict:
-        """Make SigV4-signed async HTTP request to AWS OpenSearch."""
-        url = f"{OPENSEARCH_ENDPOINT}/{path}"
+        """Make async HTTP request to OpenSearch."""
+        url = f"{OPENSEARCH_URL}/{path}"
         session = await self._get_session()
         self._request_count += 1
 
         try:
-            # Sign the request with current AWS credentials
-            signed_headers = self._sign_request(method, url, body)
-
             if method == "GET":
-                async with session.get(url, headers=signed_headers) as response:
-                    return await self._handle_response(response, method, path)
+                async with session.get(url) as response:
+                    if response.status == 200:
+                        return await response.json()
+                    else:
+                        error_text = await response.text()
+                        raise Exception(f"OpenSearch error ({response.status}): {error_text}")
 
             elif method == "POST":
-                async with session.post(url, json=body, headers=signed_headers) as response:
-                    return await self._handle_response(response, method, path)
-
-            elif method == "PUT":
-                async with session.put(url, json=body, headers=signed_headers) as response:
-                    return await self._handle_response(response, method, path)
+                headers = {"Content-Type": "application/json"}
+                async with session.post(url, json=body, headers=headers) as response:
+                    if response.status in [200, 201]:
+                        return await response.json()
+                    else:
+                        error_text = await response.text()
+                        raise Exception(f"OpenSearch error ({response.status}): {error_text}")
 
             elif method == "DELETE":
-                async with session.delete(url, json=body, headers=signed_headers) as response:
-                    return await self._handle_response(response, method, path)
-
-            elif method == "HEAD":
-                async with session.head(url, headers=signed_headers) as response:
-                    return {"status": response.status}
+                headers = {"Content-Type": "application/json"}
+                async with session.delete(url, json=body, headers=headers) as response:
+                    if response.status in [200, 201]:
+                        return await response.json()
+                    else:
+                        error_text = await response.text()
+                        raise Exception(f"OpenSearch error ({response.status}): {error_text}")
 
             else:
                 raise ValueError(f"Unsupported HTTP method: {method}")
 
-        except asyncio.TimeoutError:
-            logger.error(f"Request timeout for {method} {path}")
-            raise Exception(f"Request timeout to AWS OpenSearch at {OPENSEARCH_ENDPOINT}/{path}")
+        except asyncio.TimeoutError as e:
+            logger.error(f"Request timeout for {method} {path}: {e}")
+            raise Exception(f"Request timeout to OpenSearch at {OPENSEARCH_URL}/{path}")
 
         except aiohttp.ClientError as e:
             logger.error(f"HTTP request failed: {e}")
-            raise Exception(f"Failed to connect to AWS OpenSearch at {OPENSEARCH_ENDPOINT}: {str(e)}")
-
-    async def _handle_response(self, response: aiohttp.ClientResponse, method: str, path: str) -> dict:
-        """Handle OpenSearch response."""
-        if response.status in [200, 201]:
-            return await response.json()
-        else:
-            error_text = await response.text()
-            logger.error(f"OpenSearch error for {method} {path}: {response.status} - {error_text}")
-            raise Exception(f"OpenSearch error ({response.status}): {error_text}")
+            raise Exception(f"Failed to connect to OpenSearch at {OPENSEARCH_URL}: {str(e)}")
 
     async def close(self):
         """Close the HTTP session. Call during shutdown."""
@@ -313,22 +262,21 @@ class AWSOpenSearchClient:
             if self._session and not self._session.closed:
                 age_hours = (time.time() - self._session_created_at) / 3600 if self._session_created_at else 0
                 logger.info(
-                    f"Closing AWS OpenSearch client session "
+                    f"Closing OpenSearch client session "
                     f"(age: {age_hours:.1f} hours, requests: {self._request_count})"
                 )
                 await self._session.close()
             self._session = None
             self._session_created_at = None
             self._request_count = 0
-            self._botocore_session = None
 
 
 # Singleton instance
-_opensearch_client = AWSOpenSearchClient()
+_opensearch_client = OpenSearchClient()
 
 
 async def opensearch_request(method: str, path: str, body: Optional[dict] = None) -> dict:
-    """Make async HTTP request to AWS OpenSearch with SigV4 signing."""
+    """Make async HTTP request to OpenSearch with connection pooling."""
     return await _opensearch_client.request(method, path, body)
 
 
@@ -365,10 +313,8 @@ async def startup():
     """Initialize server: load index metadata for all tools and update tool descriptions."""
     import shared_state
 
-    logger.info("Initializing Analytical MCP Server (AWS SigV4)...")
-    logger.info(f"  OpenSearch Endpoint: {OPENSEARCH_ENDPOINT}")
-    logger.info(f"  AWS Region: {AWS_REGION}")
-    logger.info(f"  AWS Service: {AWS_SERVICE}")
+    logger.info("Initializing Analytical MCP Server...")
+    logger.info(f"  OpenSearch: {OPENSEARCH_URL}")
     logger.info(f"  Index (analyze_events_by_conclusion): {CONCLUSION_INDEX_NAME}")
     logger.info(f"  Index Pattern (analyze_all_events): {TOOL2_INDEX_NAME}")
 
@@ -432,5 +378,5 @@ if __name__ == "__main__":
     asyncio.run(startup())
 
     # Run server
-    logger.info(f"Starting Analytical MCP Server (AWS SigV4) on http://{host}:{port}")
+    logger.info(f"Starting Analytical MCP Server on http://{host}:{port}")
     mcp.run(transport="sse", host=host, port=port)

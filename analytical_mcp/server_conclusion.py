@@ -506,46 +506,121 @@ async def analyze_events_by_conclusion(
 
         # Validate value based on field type
         if field in KEYWORD_FIELDS:
-            # Use OpenSearch-based fuzzy resolution
-            resolve_result = await resolve_keyword_filter(field, str(value))
+            # Handle list values (e.g., {"country": ["India", "Brazil"]})
+            if isinstance(value, list):
+                if not value:  # Empty list
+                    warnings.append(f"Empty list for '{field}' - skipping filter")
+                    continue
 
-            if resolve_result["match_type"] == "none":
-                # No match found - add to search_terms for text search fallback
-                search_terms.append(str(value))
-                warnings.append(f"No exact match for '{value}' in '{field}' - will use text search")
+                all_matched_values = []
+                all_query_values = []
+                match_types = []
+                confidences = []
+                list_warnings = []
+                failed_values = []
 
-                # Store metadata about the failed filter
+                for v in value:
+                    v_str = str(v)
+                    all_query_values.append(v_str)
+                    resolve_result = await resolve_keyword_filter(field, v_str)
+
+                    if resolve_result["match_type"] == "none":
+                        failed_values.append(v_str)
+                    else:
+                        all_matched_values.extend(resolve_result["matched_values"])
+                        match_types.append(resolve_result["match_type"])
+                        confidences.append(resolve_result["confidence"])
+                        if resolve_result["match_type"] == "approximate":
+                            list_warnings.append(resolve_result.get("warning", f"Approximate match for '{v_str}'"))
+
+                if not all_matched_values:
+                    # All values failed - add to search_terms for text search fallback
+                    search_terms.extend([str(v) for v in value])
+                    warnings.append(f"No matches for any value in '{field}' list - will use text search")
+                    match_metadata[field] = {
+                        "match_type": "search_fallback",
+                        "query_value": value,
+                        "matched_values": [],
+                        "confidence": 0
+                    }
+                    continue
+
+                # Some or all values matched
+                if failed_values:
+                    # Partial match - warn but continue with matched values only
+                    # Don't add to search_terms since list is an OR condition
+                    warnings.append(f"Partial match for '{field}': {failed_values} not found in index (ignored)")
+
+                warnings.extend(list_warnings)
+
+                # Deduplicate matched values while preserving order
+                unique_matched = list(dict.fromkeys(all_matched_values))
+
+                # Determine overall match type
+                overall_match_type = "exact" if all(mt == "exact" for mt in match_types) else "approximate"
+                avg_confidence = sum(confidences) / len(confidences) if confidences else 0
+
                 match_metadata[field] = {
-                    "match_type": "search_fallback",
+                    "match_type": overall_match_type,
                     "query_value": value,
-                    "matched_values": [],
-                    "confidence": 0
+                    "matched_values": unique_matched,
+                    "confidence": round(avg_confidence, 1)
                 }
-                continue
 
-            # Store match metadata for transparency
-            match_metadata[field] = {
-                "match_type": resolve_result["match_type"],
-                "query_value": resolve_result["query_value"],
-                "matched_values": resolve_result["matched_values"],
-                "confidence": resolve_result["confidence"]
-            }
+                query_context["filters_normalized"][field] = {
+                    "original": value,
+                    "matched": unique_matched,
+                    "match_type": overall_match_type,
+                    "confidence": round(avg_confidence, 1)
+                }
 
-            # Add warning if approximate match
-            if resolve_result["match_type"] == "approximate":
-                warnings.append(resolve_result.get("warning", f"Approximate match for {field}"))
+                # Build terms filter clause
+                if len(unique_matched) == 1:
+                    filter_clauses.append({"term": {field: unique_matched[0]}})
+                else:
+                    filter_clauses.append({"terms": {field: unique_matched}})
 
-            if resolve_result.get("note"):
-                warnings.append(resolve_result["note"])
+            else:
+                # Single value (existing behavior)
+                resolve_result = await resolve_keyword_filter(field, str(value))
 
-            query_context["filters_normalized"][field] = {
-                "original": value,
-                "matched": resolve_result["matched_values"],
-                "match_type": resolve_result["match_type"],
-                "confidence": resolve_result["confidence"]
-            }
+                if resolve_result["match_type"] == "none":
+                    # No match found - add to search_terms for text search fallback
+                    search_terms.append(str(value))
+                    warnings.append(f"No exact match for '{value}' in '{field}' - will use text search")
 
-            filter_clauses.append(resolve_result["filter_clause"])
+                    # Store metadata about the failed filter
+                    match_metadata[field] = {
+                        "match_type": "search_fallback",
+                        "query_value": value,
+                        "matched_values": [],
+                        "confidence": 0
+                    }
+                    continue
+
+                # Store match metadata for transparency
+                match_metadata[field] = {
+                    "match_type": resolve_result["match_type"],
+                    "query_value": resolve_result["query_value"],
+                    "matched_values": resolve_result["matched_values"],
+                    "confidence": resolve_result["confidence"]
+                }
+
+                # Add warning if approximate match
+                if resolve_result["match_type"] == "approximate":
+                    warnings.append(resolve_result.get("warning", f"Approximate match for {field}"))
+
+                if resolve_result.get("note"):
+                    warnings.append(resolve_result["note"])
+
+                query_context["filters_normalized"][field] = {
+                    "original": value,
+                    "matched": resolve_result["matched_values"],
+                    "match_type": resolve_result["match_type"],
+                    "confidence": resolve_result["confidence"]
+                }
+
+                filter_clauses.append(resolve_result["filter_clause"])
 
         elif field in DATE_FIELDS:
             result = validator.validate_date(field, str(value))

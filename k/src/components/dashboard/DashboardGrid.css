@@ -1,0 +1,130 @@
+.dashboard-grid-container {
+  width: 100%;
+  min-height: 400px;
+  padding: 16px;
+  background: #f5f7fa;
+}
+
+.dashboard-grid {
+  min-height: 100%;
+}
+
+.chart-panel {
+  background: #ffffff;
+  border-radius: 8px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  transition: box-shadow 0.2s ease;
+}
+
+.chart-panel:hover {
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+}
+
+.chart-panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 4px 8px;
+  background: #f8f9fa;
+  border-bottom: 1px solid #eee;
+  min-height: 32px;
+}
+
+.chart-panel-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+}
+
+.chart-drag-handle {
+  cursor: grab;
+  padding: 4px 8px;
+  color: #999;
+  font-weight: bold;
+  letter-spacing: 2px;
+  user-select: none;
+}
+
+.chart-drag-handle:active {
+  cursor: grabbing;
+}
+
+.chart-settings-btn {
+  background: none;
+  border: none;
+  color: #666;
+  font-size: 16px;
+  cursor: pointer;
+  padding: 4px 8px;
+  line-height: 1;
+  transition: color 0.2s, background 0.2s;
+  border-radius: 4px;
+}
+
+.chart-settings-btn:hover {
+  color: #3498db;
+  background: rgba(52, 152, 219, 0.1);
+}
+
+.chart-remove-btn {
+  background: none;
+  border: none;
+  color: #999;
+  font-size: 20px;
+  cursor: pointer;
+  padding: 4px 8px;
+  line-height: 1;
+  transition: color 0.2s, background 0.2s;
+  border-radius: 4px;
+}
+
+.chart-remove-btn:hover {
+  color: #dc3545;
+  background: rgba(220, 53, 69, 0.1);
+}
+
+.chart-content {
+  flex: 1;
+  padding: 8px;
+  overflow: hidden;
+}
+
+.empty-dashboard {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  min-height: 300px;
+  color: #666;
+  text-align: center;
+}
+
+.empty-dashboard p {
+  margin: 8px 0;
+}
+
+/* React Grid Layout overrides */
+.react-grid-item.react-grid-placeholder {
+  background: #3498db;
+  opacity: 0.2;
+  border-radius: 8px;
+}
+
+.react-resizable-handle {
+  background-image: none;
+}
+
+.react-resizable-handle::after {
+  content: '';
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  width: 8px;
+  height: 8px;
+  border-right: 2px solid #ccc;
+  border-bottom: 2px solid #ccc;
+}

@@ -9,8 +9,11 @@ Environment Variables:
 - OPENSEARCH_ENDPOINT: AWS OpenSearch endpoint (e.g., https://xxx.us-east-1.es.amazonaws.com)
 - AWS_REGION: AWS region (default: us-east-1)
 - AWS_SERVICE: Service name - "es" for OpenSearch, "aoss" for Serverless (default: es)
+- AWS_ROLE_ARN: (Optional) IAM role ARN to assume for OpenSearch access
+- AWS_ROLE_SESSION_NAME: (Optional) Session name for assumed role (default: analytical-mcp-session)
 
 AWS credentials are automatically obtained from:
+- Explicit role assumption (if AWS_ROLE_ARN is set)
 - IAM role (EC2 instance profile, ECS task role, Lambda execution role)
 - Environment variables (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY)
 - AWS credentials file (~/.aws/credentials)
@@ -26,9 +29,11 @@ from typing import Optional
 import aiohttp
 from fastmcp import FastMCP
 
+import boto3
 from botocore.session import Session as BotocoreSession
 from botocore.auth import SigV4Auth
 from botocore.awsrequest import AWSRequest
+from botocore.credentials import Credentials
 
 from index_metadata import IndexMetadata
 from input_validator import InputValidator
@@ -67,13 +72,13 @@ logger = logging.getLogger(__name__)
 # ============================================================================
 
 # AWS OpenSearch configuration
-OPENSEARCH_ENDPOINT = os.getenv("OPENSEARCH_ENDPOINT", "")
+OPENSEARCH_ENDPOINT = os.getenv("OPENSEARCH_ENDPOINT", "https://your-domain.us-east-1.es.amazonaws.com")
 AWS_REGION = os.getenv("AWS_REGION", "us-east-1")
 AWS_SERVICE = os.getenv("AWS_SERVICE", "es")  # "es" for OpenSearch, "aoss" for Serverless
 
-# Validate endpoint
-if not OPENSEARCH_ENDPOINT:
-    raise ValueError("OPENSEARCH_ENDPOINT environment variable is required")
+# Optional: Explicit role to assume (leave empty to use default credential chain)
+AWS_ROLE_ARN = os.getenv("AWS_ROLE_ARN", "")  # e.g., "arn:aws:iam::123456789:role/analytical-mcp-opensearch-role"
+AWS_ROLE_SESSION_NAME = os.getenv("AWS_ROLE_SESSION_NAME", "analytical-mcp-session")
 
 # Normalize endpoint (remove trailing slash)
 OPENSEARCH_ENDPOINT = OPENSEARCH_ENDPOINT.rstrip("/")
@@ -100,6 +105,7 @@ class AWSOpenSearchClient:
 
     Uses botocore for credential management and request signing.
     Supports:
+    - Explicit role assumption (if AWS_ROLE_ARN is configured)
     - IAM roles (EC2 instance profile, ECS task role, Lambda execution role)
     - Environment credentials (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY)
     - AWS profiles (~/.aws/credentials)
@@ -113,6 +119,8 @@ class AWSOpenSearchClient:
     _session_created_at: Optional[float] = None
     _request_count: int = 0
     _botocore_session: Optional[BotocoreSession] = None
+    _assumed_credentials: Optional[Credentials] = None
+    _credentials_expiry: Optional[float] = None
 
     def __new__(cls):
         if cls._instance is None:
@@ -131,23 +139,73 @@ class AWSOpenSearchClient:
             self._botocore_session = BotocoreSession()
         return self._botocore_session
 
+    def _assume_role(self) -> Credentials:
+        """
+        Assume the configured IAM role and return temporary credentials.
+
+        Returns botocore Credentials object with access key, secret key, and session token.
+        """
+        logger.info(f"Assuming role: {AWS_ROLE_ARN}")
+
+        # Use boto3 STS client to assume role
+        sts_client = boto3.client('sts', region_name=AWS_REGION)
+
+        response = sts_client.assume_role(
+            RoleArn=AWS_ROLE_ARN,
+            RoleSessionName=AWS_ROLE_SESSION_NAME,
+            DurationSeconds=3600  # 1 hour
+        )
+
+        creds = response['Credentials']
+
+        # Store expiry time (refresh 5 minutes before actual expiry)
+        self._credentials_expiry = creds['Expiration'].timestamp() - 300
+
+        logger.info(f"Role assumed successfully, expires at {creds['Expiration']}")
+
+        # Return botocore Credentials object
+        return Credentials(
+            access_key=creds['AccessKeyId'],
+            secret_key=creds['SecretAccessKey'],
+            token=creds['SessionToken']
+        )
+
+    def _get_credentials(self) -> Credentials:
+        """
+        Get credentials - either from assumed role or default credential chain.
+
+        If AWS_ROLE_ARN is configured, assumes that role.
+        Otherwise, uses the default botocore credential chain.
+        """
+        # If role ARN is configured, use role assumption
+        if AWS_ROLE_ARN:
+            # Check if we need to refresh assumed credentials
+            if (self._assumed_credentials is None or
+                self._credentials_expiry is None or
+                time.time() >= self._credentials_expiry):
+                self._assumed_credentials = self._assume_role()
+            return self._assumed_credentials
+
+        # Otherwise use default credential chain
+        session = self._get_botocore_session()
+        credentials = session.get_credentials()
+
+        if credentials is None:
+            raise Exception(
+                "No AWS credentials found. Configure AWS_ROLE_ARN, IAM role, "
+                "environment variables (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY), "
+                "or AWS credentials file."
+            )
+
+        return credentials.get_frozen_credentials()
+
     def _sign_request(self, method: str, url: str, body: Optional[dict] = None) -> dict:
         """
         Sign request with AWS SigV4.
 
         Returns headers dict including Authorization and other required headers.
         """
-        session = self._get_botocore_session()
-        credentials = session.get_credentials()
-
-        if credentials is None:
-            raise Exception(
-                "No AWS credentials found. Configure IAM role, environment variables "
-                "(AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY), or AWS credentials file."
-            )
-
-        # Freeze credentials (important for assumed roles with session tokens)
-        frozen_credentials = credentials.get_frozen_credentials()
+        credentials = self._get_credentials()
 
         # Prepare the request body
         data = json.dumps(body) if body else None
@@ -160,7 +218,7 @@ class AWSOpenSearchClient:
         aws_request = AWSRequest(method=method, url=url, data=data, headers=headers)
 
         # Sign the request
-        SigV4Auth(frozen_credentials, AWS_SERVICE, AWS_REGION).add_auth(aws_request)
+        SigV4Auth(credentials, AWS_SERVICE, AWS_REGION).add_auth(aws_request)
 
         return dict(aws_request.headers)
 
@@ -369,6 +427,11 @@ async def startup():
     logger.info(f"  OpenSearch Endpoint: {OPENSEARCH_ENDPOINT}")
     logger.info(f"  AWS Region: {AWS_REGION}")
     logger.info(f"  AWS Service: {AWS_SERVICE}")
+    if AWS_ROLE_ARN:
+        logger.info(f"  AWS Role ARN: {AWS_ROLE_ARN}")
+        logger.info(f"  Role Session Name: {AWS_ROLE_SESSION_NAME}")
+    else:
+        logger.info("  AWS Auth: Using default credential chain (no explicit role)")
     logger.info(f"  Index (analyze_events_by_conclusion): {CONCLUSION_INDEX_NAME}")
     logger.info(f"  Index Pattern (analyze_all_events): {TOOL2_INDEX_NAME}")
 

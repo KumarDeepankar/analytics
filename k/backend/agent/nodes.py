@@ -19,9 +19,15 @@ from .prompts import (
     PLANNING_PROMPT_TEMPLATE,
     SYNTHESIS_SYSTEM_PROMPT,
     SYNTHESIS_PROMPT_TEMPLATE,
+    PRESENTATION_SYSTEM_PROMPT,
+    PRESENTATION_GENERATE_PROMPT,
+    PRESENTATION_UPDATE_PROMPT,
+    PRESENTATION_JSON_SCHEMA,
     format_tools_description,
     format_conversation_history,
     format_tool_results,
+    format_dashboard_context,
+    detect_presentation_intent,
 )
 
 logger = logging.getLogger(__name__)
@@ -259,23 +265,43 @@ async def synthesis_node(state: BISearchAgentState) -> BISearchAgentState:
     """
     add_thinking_step(state, "synthesis", "Synthesizing results into response...")
 
+    # Create LLM client (needed for both synthesis and presentation generation)
+    llm_client = LLMClientSelector.create_client(
+        provider=state["llm_provider"],
+        model=state["llm_model"],
+    )
+
+    # Check for presentation intent early — even direct responses may need a presentation
+    pres_intent = detect_presentation_intent(
+        state["query"], state["conversation_history"]
+    )
+
     # Check for direct response (no synthesis needed)
     if state["direct_response"]:
         state["final_response"] = state["direct_response"]
+        # Still generate presentation if user asked for one
+        if pres_intent:
+            add_thinking_step(state, "synthesis", f"Generating presentation ({pres_intent})...")
+            presentation = await generate_presentation_config(state, llm_client, pres_intent)
+            if presentation:
+                state["presentation_config"] = presentation
+                add_thinking_step(state, "synthesis", f"Presentation created: {len(presentation.get('slides', []))} slides")
         state["end_time"] = datetime.utcnow().isoformat()
         return state
 
     # Check if we have any results to synthesize
     if not state["gathered_information"]:
         state["final_response"] = "I wasn't able to find any relevant information for your query. Could you try rephrasing it?"
+        # Still generate presentation if user asked for one (e.g. from existing dashboard data)
+        if pres_intent:
+            add_thinking_step(state, "synthesis", f"Generating presentation ({pres_intent})...")
+            presentation = await generate_presentation_config(state, llm_client, pres_intent)
+            if presentation:
+                state["presentation_config"] = presentation
+                add_thinking_step(state, "synthesis", f"Presentation created: {len(presentation.get('slides', []))} slides")
+                state["final_response"] = f"I've created a presentation: **{presentation['title']}** with {len(presentation['slides'])} slides."
         state["end_time"] = datetime.utcnow().isoformat()
         return state
-
-    # Create LLM client
-    llm_client = LLMClientSelector.create_client(
-        provider=state["llm_provider"],
-        model=state["llm_model"],
-    )
 
     # Format prompt
     conv_history = format_conversation_history(state["conversation_history"])
@@ -302,6 +328,14 @@ async def synthesis_node(state: BISearchAgentState) -> BISearchAgentState:
 
         # Extract any sources mentioned
         state["extracted_sources"] = extract_sources(state["gathered_information"])
+
+        # Generate presentation if user asked for one (with full data context)
+        if pres_intent:
+            add_thinking_step(state, "synthesis", f"Generating presentation ({pres_intent})...")
+            presentation = await generate_presentation_config(state, llm_client, pres_intent)
+            if presentation:
+                state["presentation_config"] = presentation
+                add_thinking_step(state, "synthesis", f"Presentation created: {len(presentation.get('slides', []))} slides")
 
     except Exception as e:
         logger.error(f"Synthesis failed: {e}")
@@ -346,6 +380,89 @@ def extract_sources(gathered_info: list[dict]) -> list[dict]:
                         })
 
     return sources[:10]  # Limit to 10 sources
+
+
+async def generate_presentation_config(
+    state: BISearchAgentState,
+    llm_client,
+    intent: str,
+) -> dict | None:
+    """
+    Generate or update a presentation using the agent's LLM.
+    Has full access to conversation history, dashboard data, and current presentation.
+    """
+    conv_history = format_conversation_history(state["conversation_history"])
+    dashboard_context = format_dashboard_context(state)
+
+    if intent == "update":
+        # Extract current presentation from conversation history
+        current_pres = "{}"
+        for msg in state["conversation_history"]:
+            if msg.get("role") == "system" and "Current presentation state:" in msg.get("content", ""):
+                pres_text = msg["content"].replace("Current presentation state:\n", "", 1)
+                current_pres = pres_text
+                break
+
+        prompt = PRESENTATION_UPDATE_PROMPT.format(
+            query=state["query"],
+            current_presentation=current_pres,
+            dashboard_context=dashboard_context,
+            schema=PRESENTATION_JSON_SCHEMA,
+        )
+    else:
+        # Determine number of slides from query or default
+        num_slides = 5
+        q = state["query"].lower()
+        for word in q.split():
+            if word.isdigit():
+                n = int(word)
+                if 1 <= n <= 20:
+                    num_slides = n
+                    break
+
+        prompt = PRESENTATION_GENERATE_PROMPT.format(
+            query=state["query"],
+            num_slides=num_slides,
+            dashboard_context=dashboard_context,
+            conversation_history=conv_history,
+            schema=PRESENTATION_JSON_SCHEMA,
+        )
+
+    try:
+        raw = await llm_client.generate(
+            prompt=prompt,
+            system_prompt=PRESENTATION_SYSTEM_PROMPT,
+            temperature=0.7,
+            max_tokens=8192,
+        )
+
+        # Strip markdown fences if present
+        cleaned = re.sub(r"^```(?:json)?\s*", "", raw.strip())
+        cleaned = re.sub(r"\s*```$", "", cleaned)
+        presentation = json.loads(cleaned)
+
+        # Basic validation
+        if not isinstance(presentation, dict) or "slides" not in presentation or "title" not in presentation:
+            logger.error("LLM returned presentation without required fields")
+            return None
+
+        # Ensure ids exist
+        for i, slide in enumerate(presentation.get("slides", [])):
+            if "id" not in slide:
+                slide["id"] = f"slide-{i + 1}"
+            for j, el in enumerate(slide.get("elements", [])):
+                if "id" not in el:
+                    el["id"] = f"el-{i + 1}-{j + 1}"
+
+        logger.info(f"Generated presentation '{presentation['title']}' with {len(presentation['slides'])} slides")
+        return presentation
+
+    except json.JSONDecodeError as e:
+        logger.error(f"Failed to parse presentation JSON from LLM: {e}")
+        return None
+    except Exception as e:
+        logger.error(f"Presentation generation failed: {e}")
+        return None
 
 
 def format_fallback_response(state: BISearchAgentState) -> str:

@@ -1,0 +1,221 @@
+/* SlideToolbar */
+
+.slide-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 16px;
+  background: #ffffff;
+  border-bottom: 1px solid #e2e8f0;
+  gap: 12px;
+  flex-shrink: 0;
+  min-height: 48px;
+}
+
+.slide-toolbar-left,
+.slide-toolbar-center,
+.slide-toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.slide-toolbar-left {
+  min-width: 0;
+}
+
+.slide-toolbar-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #0f172a;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 180px;
+}
+
+.slide-toolbar-title-input {
+  font-size: 14px;
+  font-weight: 600;
+  color: #0f172a;
+  max-width: 200px;
+  padding: 2px 6px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  outline: none;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.slide-toolbar-title-input:hover {
+  border-color: #e2e8f0;
+  background: #f8fafc;
+}
+
+.slide-toolbar-title-input:focus {
+  border-color: #6366f1;
+  background: #ffffff;
+  box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.1);
+}
+
+.slide-toolbar-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 10px;
+  background: transparent;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 500;
+  color: #475569;
+  transition: all 0.15s;
+  white-space: nowrap;
+}
+
+.slide-toolbar-btn:hover {
+  background: #f8fafc;
+  border-color: #94a3b8;
+}
+
+.slide-toolbar-btn.active {
+  background: #eef2ff;
+  border-color: #6366f1;
+  color: #4338ca;
+}
+
+.slide-toolbar-btn.danger {
+  color: #dc2626;
+  border-color: #fecaca;
+}
+
+.slide-toolbar-btn.danger:hover {
+  background: #fef2f2;
+  border-color: #f87171;
+}
+
+.slide-toolbar-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+.slide-toolbar-btn.back-btn {
+  border: none;
+  color: #64748b;
+}
+
+.slide-toolbar-btn.back-btn:hover {
+  color: #334155;
+  background: #f1f5f9;
+}
+
+/* Visual separator between toolbar groups */
+.slide-toolbar-sep {
+  width: 1px;
+  height: 20px;
+  background: #e2e8f0;
+  flex-shrink: 0;
+}
+
+/* Icon label next to prop controls */
+.prop-label-icon {
+  color: #94a3b8;
+  flex-shrink: 0;
+}
+
+.slide-toolbar-counter {
+  font-size: 12px;
+  color: #94a3b8;
+  font-weight: 500;
+  padding: 0 4px;
+}
+
+/* Property controls */
+.slide-toolbar-props {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 8px;
+  border-left: 1px solid #e2e8f0;
+}
+
+.prop-input {
+  border: 1px solid #e2e8f0;
+  border-radius: 4px;
+  font-size: 12px;
+  outline: none;
+}
+
+.prop-input:focus {
+  border-color: #6366f1;
+}
+
+.prop-fontsize {
+  width: 48px;
+  padding: 3px 4px;
+  text-align: center;
+}
+
+.prop-color {
+  width: 28px;
+  height: 26px;
+  padding: 1px;
+  cursor: pointer;
+}
+
+.prop-bgcolor {
+  border: 1px solid #cbd5e1;
+}
+
+.prop-btn {
+  width: 26px;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 1px solid #e2e8f0;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 700;
+  color: #475569;
+  transition: all 0.15s;
+}
+
+.prop-btn.italic {
+  font-style: italic;
+  font-family: Georgia, serif;
+}
+
+.prop-btn:hover {
+  background: #f1f5f9;
+}
+
+.prop-btn.active {
+  background: #eef2ff;
+  border-color: #6366f1;
+  color: #4338ca;
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+  .slide-toolbar {
+    flex-wrap: wrap;
+    padding: 6px 12px;
+  }
+
+  .slide-toolbar-title {
+    max-width: 100px;
+  }
+
+  .slide-toolbar-btn span {
+    display: none;
+  }
+
+  .slide-toolbar-props {
+    display: none;
+  }
+}

@@ -1,0 +1,165 @@
+/* Active Filters Bar - Compact horizontal filter display */
+.active-filters-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  background: linear-gradient(135deg, #eef2ff 0%, #f5f3ff 100%);
+  border-bottom: 1px solid #c7d2fe;
+  animation: slideDown 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+@keyframes slideDown {
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.active-filters-bar.compact {
+  padding: 6px 12px;
+  background: #f1f5f9;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.filters-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #4f46e5;
+  white-space: nowrap;
+}
+
+.filters-label svg {
+  opacity: 0.8;
+}
+
+.filter-chips-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  flex: 1;
+  overflow-x: auto;
+}
+
+.filter-chip-bar {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: #ffffff;
+  border: 1px solid #c7d2fe;
+  border-radius: 16px;
+  padding: 4px 6px 4px 10px;
+  font-size: 12px;
+  color: #4f46e5;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+  animation: chipFadeIn 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+@keyframes chipFadeIn {
+  from {
+    opacity: 0;
+    transform: scale(0.9);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.filter-chip-bar:hover {
+  border-color: #6366f1;
+  box-shadow: 0 2px 4px rgba(99, 102, 241, 0.15);
+}
+
+.chip-field {
+  font-weight: 600;
+  color: #0f172a;
+}
+
+.chip-op {
+  color: #64748b;
+  font-size: 11px;
+}
+
+.chip-value {
+  font-weight: 500;
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #4f46e5;
+}
+
+.chip-remove {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  background: transparent;
+  border: none;
+  color: #64748b;
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  border-radius: 50%;
+  transition: all 0.15s;
+  margin-left: 2px;
+}
+
+.chip-remove:hover {
+  background: #ef4444;
+  color: white;
+}
+
+.clear-filters-btn {
+  background: none;
+  border: 1px solid #6366f1;
+  color: #6366f1;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 500;
+  padding: 4px 12px;
+  border-radius: 14px;
+  transition: all 0.15s;
+  white-space: nowrap;
+}
+
+.clear-filters-btn:hover {
+  background: #6366f1;
+  color: white;
+}
+
+/* Compact version */
+.active-filters-bar.compact .filters-label {
+  font-size: 12px;
+  color: #475569;
+}
+
+.active-filters-bar.compact .filter-chip-bar {
+  padding: 2px 4px 2px 8px;
+  font-size: 11px;
+  border-color: #e2e8f0;
+}
+
+.active-filters-bar.compact .chip-value {
+  max-width: 80px;
+}
+
+.active-filters-bar.compact .chip-remove {
+  width: 16px;
+  height: 16px;
+  font-size: 12px;
+}
+
+.active-filters-bar.compact .clear-filters-btn {
+  padding: 2px 8px;
+  font-size: 11px;
+}

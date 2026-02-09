@@ -10,19 +10,17 @@ export const createDemoDashboard = (): Dashboard => {
       id: chart1Id,
       type: 'bar',
       title: 'Event Count by Country',
-      dataSource: 'events_analytics_v4',
+      dataSource: 'analyze_all_events',  // MCP tool name
       xField: 'country',
-      yField: 'event_count',
-      aggregation: 'sum',
+      aggregation: 'count',
     },
     {
       id: chart2Id,
       type: 'pie',
       title: 'Events by Theme',
-      dataSource: 'events_analytics_v4',
+      dataSource: 'analyze_all_events',  // MCP tool name
       xField: 'event_theme',
-      yField: 'event_count',
-      aggregation: 'sum',
+      aggregation: 'count',
     },
   ];
 
@@ -50,7 +48,7 @@ export const createDemoDashboard = (): Dashboard => {
   return {
     id: uuidv4(),
     name: 'Events Analytics Dashboard',
-    description: 'Dashboard for events_analytics_v4 index',
+    description: 'Dashboard using MCP analytics tools',
     charts,
     layout,
     createdAt: new Date().toISOString(),

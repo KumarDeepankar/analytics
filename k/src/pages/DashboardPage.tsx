@@ -13,6 +13,8 @@ import FilterPanel from '../components/filters/FilterPanel';
 import AISearchBar from '../components/common/AISearchBar';
 import AddChartModal from '../components/dashboard/AddChartModal';
 import { createDemoDashboard } from '../utils/demoData';
+import { setDataSources } from '../store/slices/dataSourceSlice';
+import { agentService } from '../services/agentService';
 import './DashboardPage.css';
 
 const DashboardPage: React.FC = () => {
@@ -22,7 +24,19 @@ const DashboardPage: React.FC = () => {
   const isEditing = useAppSelector((state) => state.dashboards.isEditing);
   const [showAddChart, setShowAddChart] = useState(false);
 
-  const activeDashboard = dashboards.find((d) => d.id === activeDashboardId);
+  const dataSourcesLoaded = useAppSelector((state) => state.dataSources.loaded);
+  const activeDashboard = dashboards.find((d: Dashboard) => d.id === activeDashboardId);
+
+  // Fetch data sources on mount so field metadata is available for filtering
+  useEffect(() => {
+    if (!dataSourcesLoaded) {
+      agentService.getDataSources().then((sources) => {
+        dispatch(setDataSources(sources));
+      }).catch((err) => {
+        console.error('Failed to pre-fetch data sources:', err);
+      });
+    }
+  }, [dispatch, dataSourcesLoaded]);
 
   // Create demo dashboard if none exist
   useEffect(() => {
@@ -60,7 +74,7 @@ const DashboardPage: React.FC = () => {
 
       // Calculate position for new chart
       const currentLayout = activeDashboard?.layout || [];
-      const maxY = currentLayout.reduce((max, item) => Math.max(max, item.y + item.h), 0);
+      const maxY = currentLayout.reduce((max: number, item: DashboardLayout) => Math.max(max, item.y + item.h), 0);
 
       const layout: DashboardLayout = {
         i: chartId,
@@ -92,7 +106,7 @@ const DashboardPage: React.FC = () => {
             onChange={(e) => dispatch(setActiveDashboard(e.target.value))}
             className="dashboard-select"
           >
-            {dashboards.map((d) => (
+            {dashboards.map((d: Dashboard) => (
               <option key={d.id} value={d.id}>
                 {d.name}
               </option>

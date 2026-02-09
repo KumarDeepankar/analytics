@@ -241,4 +241,8 @@ async def run_search_agent_stream(
             if state_update.get("chart_configs"):
                 yield ("chart_configs", state_update["chart_configs"])
 
+            # Yield presentation config if any
+            if state_update.get("presentation_config"):
+                yield ("presentation_config", state_update["presentation_config"])
+
     yield ("complete", {"end_time": initial_state.get("end_time")})

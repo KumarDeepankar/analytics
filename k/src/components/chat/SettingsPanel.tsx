@@ -3,6 +3,7 @@
  */
 
 import React, { useEffect } from 'react';
+import { X, Brain, Wrench, RefreshCw, AlertTriangle, Check, Bot } from 'lucide-react';
 import { useAppSelector, useAppDispatch } from '../../store';
 import {
   fetchModels,
@@ -13,6 +14,7 @@ import {
   disableAllTools,
   closeSettingsPanel,
 } from '../../store/slices/settingsSlice';
+import type { LLMModel, Tool } from '../../services/agentService';
 import './SettingsPanel.css';
 
 const SettingsPanel: React.FC = () => {
@@ -53,12 +55,12 @@ const SettingsPanel: React.FC = () => {
   };
 
   const getModelIcon = (provider: string, modelId: string) => {
-    if (provider === 'anthropic') return '🧠';
-    if (modelId.includes('llama')) return '🦙';
-    if (modelId.includes('mistral')) return '🌊';
-    if (modelId.includes('qwen')) return '⚡';
-    if (modelId.includes('gemma')) return '💎';
-    return '🤖';
+    if (provider === 'anthropic') return <Brain size={20} />;
+    if (modelId.includes('llama')) return <Bot size={20} />;
+    if (modelId.includes('mistral')) return <Bot size={20} />;
+    if (modelId.includes('qwen')) return <Bot size={20} />;
+    if (modelId.includes('gemma')) return <Bot size={20} />;
+    return <Bot size={20} />;
   };
 
   const getProviderLabel = (provider: string) => {
@@ -73,7 +75,7 @@ const SettingsPanel: React.FC = () => {
         <div className="settings-header">
           <h2>Agent Settings</h2>
           <button className="close-btn" onClick={() => dispatch(closeSettingsPanel())}>
-            ×
+            <X size={20} />
           </button>
         </div>
 
@@ -81,7 +83,7 @@ const SettingsPanel: React.FC = () => {
           {/* Model Selection */}
           <section className="settings-section">
             <h3>
-              <span className="section-icon">🧠</span>
+              <Brain size={16} className="section-icon" />
               Model Selection
             </h3>
 
@@ -92,20 +94,20 @@ const SettingsPanel: React.FC = () => {
               </div>
             ) : modelsError ? (
               <div className="error-state">
-                <span>⚠️ {modelsError}</span>
+                <span><AlertTriangle size={16} /> {modelsError}</span>
                 <button onClick={() => dispatch(fetchModels())}>Retry</button>
               </div>
             ) : (
               <div className="model-list">
                 {/* Group by provider */}
                 {['ollama', 'anthropic'].map((provider) => {
-                  const providerModels = availableModels.filter((m) => m.provider === provider);
+                  const providerModels = availableModels.filter((m: LLMModel) => m.provider === provider);
                   if (providerModels.length === 0) return null;
 
                   return (
                     <div key={provider} className="provider-group">
                       <div className="provider-label">{getProviderLabel(provider)}</div>
-                      {providerModels.map((model) => (
+                      {providerModels.map((model: LLMModel) => (
                         <div
                           key={model.id}
                           className={`model-item ${
@@ -123,7 +125,7 @@ const SettingsPanel: React.FC = () => {
                             )}
                           </div>
                           {selectedModel === model.id && selectedProvider === model.provider && (
-                            <span className="check-icon">✓</span>
+                            <Check size={14} className="check-icon" />
                           )}
                         </div>
                       ))}
@@ -145,7 +147,7 @@ const SettingsPanel: React.FC = () => {
           <section className="settings-section">
             <div className="section-header">
               <h3>
-                <span className="section-icon">🔧</span>
+                <Wrench size={16} className="section-icon" />
                 Available Tools
               </h3>
               <div className="tool-actions">
@@ -169,7 +171,7 @@ const SettingsPanel: React.FC = () => {
                   disabled={toolsLoading}
                   title="Refresh tools"
                 >
-                  ↻
+                  <RefreshCw size={14} />
                 </button>
               </div>
             </div>
@@ -181,19 +183,19 @@ const SettingsPanel: React.FC = () => {
               </div>
             ) : toolsError ? (
               <div className="error-state">
-                <span>⚠️ {toolsError}</span>
+                <span><AlertTriangle size={16} /> {toolsError}</span>
                 <button onClick={handleRefreshTools}>Retry</button>
               </div>
             ) : (
               <div className="tool-list">
-                {availableTools.map((tool) => (
+                {availableTools.map((tool: Tool) => (
                   <div
                     key={tool.name}
                     className={`tool-item ${enabledTools.includes(tool.name) ? 'enabled' : ''}`}
                     onClick={() => handleToolToggle(tool.name)}
                   >
                     <div className="tool-checkbox">
-                      {enabledTools.includes(tool.name) ? '✓' : ''}
+                      {enabledTools.includes(tool.name) ? <Check size={12} /> : ''}
                     </div>
                     <div className="tool-info">
                       <span className="tool-name">{tool.name}</span>

@@ -3,23 +3,55 @@
  */
 
 import React, { useState } from 'react';
+import { BarChart3, MessageCircle, Pencil, Trash2, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
 import { useAppSelector, useAppDispatch } from '../../store';
 import {
   createChatDashboard,
   setActiveDashboard,
   deleteChatDashboard,
+  deleteDashboardFromBackend,
   renameDashboard,
+  saveDashboardToBackend,
 } from '../../store/slices/chatSlice';
+import type { ChatDashboard } from '../../types/chat';
 import './ChatSidebar.css';
 
-const ChatSidebar: React.FC = () => {
+interface ChatSidebarProps {
+  isCollapsed?: boolean;
+  onToggleCollapse?: () => void;
+}
+
+const ChatSidebar: React.FC<ChatSidebarProps> = ({ isCollapsed = false, onToggleCollapse }) => {
   const dispatch = useAppDispatch();
   const { dashboards, activeDashboardId } = useAppSelector((state) => state.chat);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editTitle, setEditTitle] = useState('');
+  const [showNewInput, setShowNewInput] = useState(false);
+  const [newTitle, setNewTitle] = useState('');
 
   const handleCreateNew = () => {
-    dispatch(createChatDashboard({}));
+    setNewTitle('');
+    setShowNewInput(true);
+  };
+
+  const handleConfirmCreate = () => {
+    const title = newTitle.trim() || `Dashboard ${dashboards.length + 1}`;
+    dispatch(createChatDashboard({ title }));
+    setShowNewInput(false);
+    setNewTitle('');
+  };
+
+  const handleCancelCreate = () => {
+    setShowNewInput(false);
+    setNewTitle('');
+  };
+
+  const handleNewKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') {
+      handleConfirmCreate();
+    } else if (e.key === 'Escape') {
+      handleCancelCreate();
+    }
   };
 
   const handleSelect = (id: string) => {
@@ -30,6 +62,7 @@ const ChatSidebar: React.FC = () => {
     e.stopPropagation();
     if (confirm('Delete this dashboard?')) {
       dispatch(deleteChatDashboard(id));
+      dispatch(deleteDashboardFromBackend(id));
     }
   };
 
@@ -42,6 +75,11 @@ const ChatSidebar: React.FC = () => {
   const handleSaveEdit = (id: string) => {
     if (editTitle.trim()) {
       dispatch(renameDashboard({ id, title: editTitle.trim() }));
+      // Persist to backend
+      const dashboard = dashboards.find((d: ChatDashboard) => d.id === id);
+      if (dashboard) {
+        dispatch(saveDashboardToBackend({ ...dashboard, title: editTitle.trim() }));
+      }
     }
     setEditingId(null);
     setEditTitle('');
@@ -72,74 +110,134 @@ const ChatSidebar: React.FC = () => {
   };
 
   return (
-    <div className="chat-sidebar">
+    <div className={`chat-sidebar ${isCollapsed ? 'collapsed' : ''}`}>
       <div className="sidebar-header">
-        <h2>Dashboards</h2>
-        <button className="new-dashboard-btn" onClick={handleCreateNew} title="New Dashboard">
-          +
-        </button>
+        {!isCollapsed && <h2>Dashboards</h2>}
+        <div className="sidebar-header-actions">
+          {!isCollapsed && (
+            <button className="new-dashboard-btn" onClick={handleCreateNew} title="New Dashboard">
+              +
+            </button>
+          )}
+          {onToggleCollapse && (
+            <button
+              className="sidebar-collapse-btn"
+              onClick={onToggleCollapse}
+              title={isCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+            >
+              {isCollapsed ? <PanelLeftOpen size={18} /> : <PanelLeftClose size={18} />}
+            </button>
+          )}
+        </div>
       </div>
 
       <div className="dashboard-list">
-        {dashboards.length === 0 ? (
-          <div className="empty-state">
-            <p>No dashboards yet</p>
-            <button onClick={handleCreateNew}>Create your first dashboard</button>
-          </div>
-        ) : (
-          dashboards.map((dashboard) => (
-            <div
-              key={dashboard.id}
-              className={`dashboard-item ${dashboard.id === activeDashboardId ? 'active' : ''}`}
-              onClick={() => handleSelect(dashboard.id)}
+        {isCollapsed ? (
+          <>
+            <button
+              className="sidebar-collapsed-add"
+              onClick={() => dispatch(createChatDashboard({ title: `Dashboard ${dashboards.length + 1}` }))}
+              title="New Dashboard"
             >
-              <div className="dashboard-icon">
-                {dashboard.dashboardCharts.length > 0 ? '📊' : '💬'}
+              +
+            </button>
+            {dashboards.map((dashboard: ChatDashboard) => (
+              <div
+                key={dashboard.id}
+                className={`dashboard-item ${dashboard.id === activeDashboardId ? 'active' : ''}`}
+                onClick={() => handleSelect(dashboard.id)}
+                title={dashboard.title}
+              >
+                <div className="dashboard-icon">
+                  {dashboard.dashboardCharts.length > 0 ? <BarChart3 size={20} /> : <MessageCircle size={20} />}
+                </div>
               </div>
-              <div className="dashboard-info">
-                {editingId === dashboard.id ? (
+            ))}
+          </>
+        ) : (
+          <>
+            {showNewInput && (
+              <div className="new-dashboard-modal-overlay" onClick={handleCancelCreate}>
+                <div className="new-dashboard-modal" onClick={(e) => e.stopPropagation()}>
+                  <h3>New Dashboard</h3>
                   <input
                     type="text"
-                    value={editTitle}
-                    onChange={(e) => setEditTitle(e.target.value)}
-                    onBlur={() => handleSaveEdit(dashboard.id)}
-                    onKeyDown={(e) => handleKeyDown(e, dashboard.id)}
+                    value={newTitle}
+                    onChange={(e) => setNewTitle(e.target.value)}
+                    onKeyDown={handleNewKeyDown}
+                    placeholder="Enter dashboard name..."
                     autoFocus
-                    className="edit-title-input"
-                    onClick={(e) => e.stopPropagation()}
+                    className="new-dashboard-modal-input"
                   />
-                ) : (
-                  <>
-                    <span className="dashboard-title">{dashboard.title}</span>
-                    <span className="dashboard-meta">
-                      {dashboard.messages.length} messages · {dashboard.dashboardCharts.length} charts
-                    </span>
-                    <span className="dashboard-time">{formatDate(dashboard.updatedAt)}</span>
-                  </>
-                )}
+                  <div className="new-dashboard-modal-actions">
+                    <button className="modal-btn cancel" onClick={handleCancelCreate}>Cancel</button>
+                    <button className="modal-btn create" onClick={handleConfirmCreate}>Create</button>
+                  </div>
+                </div>
               </div>
-              <div className="dashboard-actions">
-                <button
-                  className="action-btn"
-                  onClick={(e) => handleStartEdit(e, dashboard.id, dashboard.title)}
-                  title="Rename"
-                >
-                  ✏️
-                </button>
-                <button
-                  className="action-btn delete"
-                  onClick={(e) => handleDelete(e, dashboard.id)}
-                  title="Delete"
-                >
-                  🗑️
-                </button>
+            )}
+            {dashboards.length === 0 && !showNewInput ? (
+              <div className="empty-state">
+                <p>No dashboards yet</p>
+                <button onClick={handleCreateNew}>Create your first dashboard</button>
               </div>
-            </div>
-          ))
+            ) : (
+              dashboards.map((dashboard: ChatDashboard) => (
+                <div
+                  key={dashboard.id}
+                  className={`dashboard-item ${dashboard.id === activeDashboardId ? 'active' : ''}`}
+                  onClick={() => handleSelect(dashboard.id)}
+                >
+                  <div className="dashboard-icon">
+                    {dashboard.dashboardCharts.length > 0 ? <BarChart3 size={20} /> : <MessageCircle size={20} />}
+                  </div>
+                  <div className="dashboard-info">
+                    {editingId === dashboard.id ? (
+                      <input
+                        type="text"
+                        value={editTitle}
+                        onChange={(e) => setEditTitle(e.target.value)}
+                        onBlur={() => handleSaveEdit(dashboard.id)}
+                        onKeyDown={(e) => handleKeyDown(e, dashboard.id)}
+                        autoFocus
+                        className="edit-title-input"
+                        onClick={(e) => e.stopPropagation()}
+                      />
+                    ) : (
+                      <>
+                        <span className="dashboard-title">{dashboard.title}</span>
+                        <span className="dashboard-meta">
+                          {dashboard.messages.length} messages · {dashboard.dashboardCharts.length} charts
+                        </span>
+                        <span className="dashboard-time">{formatDate(dashboard.updatedAt)}</span>
+                      </>
+                    )}
+                  </div>
+                  <div className="dashboard-actions">
+                    <button
+                      className="action-btn"
+                      onClick={(e) => handleStartEdit(e, dashboard.id, dashboard.title)}
+                      title="Rename"
+                    >
+                      <Pencil size={14} />
+                    </button>
+                    <button
+                      className="action-btn delete"
+                      onClick={(e) => handleDelete(e, dashboard.id)}
+                      title="Delete"
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  </div>
+                </div>
+              ))
+            )}
+          </>
         )}
       </div>
     </div>
   );
 };
 
-export default ChatSidebar;
+export default React.memo(ChatSidebar);
+export type { ChatSidebarProps };

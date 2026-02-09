@@ -3,6 +3,7 @@
  */
 
 import React, { useState, useRef, useEffect } from 'react';
+import { ArrowUp, Square, Lightbulb } from 'lucide-react';
 import './ChatInput.css';
 
 interface ChatInputProps {
@@ -19,7 +20,7 @@ const ChatInput: React.FC<ChatInputProps> = ({ onSend, isProcessing, onCancel })
   useEffect(() => {
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto';
-      textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 150)}px`;
+      textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, window.innerHeight * 0.4)}px`;
     }
   }, [message]);
 
@@ -53,24 +54,23 @@ const ChatInput: React.FC<ChatInputProps> = ({ onSend, isProcessing, onCancel })
         />
         <div className="input-actions">
           {isProcessing ? (
-            <button type="button" className="cancel-btn" onClick={onCancel}>
-              <span className="btn-icon">⏹</span>
-              Cancel
+            <button type="button" className="cancel-btn" onClick={onCancel} title="Cancel">
+              <Square size={14} className="btn-icon" />
             </button>
           ) : (
             <button
               type="submit"
               className="send-btn"
               disabled={!message.trim()}
+              title="Send"
             >
-              <span className="btn-icon">→</span>
-              Send
+              <ArrowUp size={16} strokeWidth={2.5} />
             </button>
           )}
         </div>
       </div>
       <div className="input-hint">
-        <span>💡 Try: "Create a bar chart showing events by device type"</span>
+        <span><Lightbulb size={12} /> Try: "Create a bar chart showing events by device type"</span>
       </div>
     </form>
   );

@@ -2,7 +2,7 @@
  * Chat Types for Dashboard Conversations
  */
 
-import type { ChartConfig } from './index';
+import type { ChartConfig, ImageConfig, Filter } from './index';
 
 export interface ChatMessage {
   id: string;
@@ -15,6 +15,8 @@ export interface ChatMessage {
   sources?: Array<{ title: string; url?: string; snippet?: string }>;
   // Thinking steps shown during processing
   thinkingSteps?: Array<{ node: string; message: string }>;
+  // Image responses from agent
+  images?: ImageConfig[];
   // Whether charts have been added to dashboard
   chartsAddedToDashboard?: string[]; // IDs of added charts
   // Loading state
@@ -31,7 +33,9 @@ export interface ChatDashboard {
   messages: ChatMessage[];
   // Charts that have been added to the dashboard grid
   dashboardCharts: ChartConfig[];
-  // Layout for dashboard charts
+  // Images that have been added to the dashboard grid
+  dashboardImages?: ImageConfig[];
+  // Layout for dashboard charts and images
   layout: Array<{
     i: string;
     x: number;
@@ -39,10 +43,29 @@ export interface ChatDashboard {
     w: number;
     h: number;
   }>;
+  // Saved filters for this dashboard
+  filters?: Filter[];
+  // Dashboard background theme
+  dashboardTheme?: string;
+  // Publishing state
+  isPublished?: boolean;
+  shareId?: string;
+  shareUrl?: string;
+  // Sync state
+  isSaved?: boolean;
+  lastSavedAt?: string;
 }
 
 export interface ChatState {
   dashboards: ChatDashboard[];
   activeDashboardId: string | null;
   isProcessing: boolean;
+  // Loading state
+  isLoading: boolean;
+  isLoaded: boolean;
+  // Saving/publishing state
+  isSaving: boolean;
+  isPublishing: boolean;
+  saveError: string | null;
+  publishError: string | null;
 }

@@ -5,14 +5,33 @@ import dashboardReducer from './slices/dashboardSlice';
 import chartDataReducer from './slices/chartDataSlice';
 import chatReducer from './slices/chatSlice';
 import settingsReducer from './slices/settingsSlice';
+import dataSourceReducer from './slices/dataSourceSlice';
+import presentationReducer from './slices/presentationSlice';
 
 const STORAGE_KEY = 'agentic_search_dashboards';
 const CHAT_STORAGE_KEY = 'agentic_search_chat_dashboards';
 const SETTINGS_STORAGE_KEY = 'agentic_search_settings';
+const STORAGE_VERSION_KEY = 'agentic_search_version';
+const CURRENT_VERSION = '4'; // Increment this to clear stale cache
+
+// Clear stale localStorage if version mismatch
+const checkAndClearStaleStorage = () => {
+  const storedVersion = localStorage.getItem(STORAGE_VERSION_KEY);
+  if (storedVersion !== CURRENT_VERSION) {
+    localStorage.removeItem(STORAGE_KEY);
+    localStorage.removeItem(CHAT_STORAGE_KEY);
+    localStorage.removeItem(SETTINGS_STORAGE_KEY);
+    localStorage.setItem(STORAGE_VERSION_KEY, CURRENT_VERSION);
+  }
+};
 
 // Load persisted state from localStorage
-const loadPersistedState = () => {
-  const result: Record<string, unknown> = {};
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const loadPersistedState = (): any => {
+  checkAndClearStaleStorage();
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const result: any = {};
   try {
     const dashboardState = localStorage.getItem(STORAGE_KEY);
     if (dashboardState) {
@@ -35,9 +54,19 @@ const loadPersistedState = () => {
       const parsed = JSON.parse(settingsState);
       // Only restore certain settings fields (not loading states)
       result.settings = {
-        selectedProvider: parsed.selectedProvider,
-        selectedModel: parsed.selectedModel,
-        enabledTools: parsed.enabledTools,
+        selectedProvider: parsed.selectedProvider || 'ollama',
+        selectedModel: parsed.selectedModel || 'llama3.2:latest',
+        enabledTools: parsed.enabledTools || [],
+        dashboardTheme: parsed.dashboardTheme || 'light',
+        // Ensure arrays exist to prevent undefined errors
+        availableModels: [],
+        availableTools: [],
+        // Initialize loading/error states
+        modelsLoading: false,
+        modelsError: null,
+        toolsLoading: false,
+        toolsError: null,
+        isSettingsPanelOpen: false,
       };
     }
   } catch (err) {
@@ -71,6 +100,7 @@ const saveSettingsState = (state: ReturnType<typeof settingsReducer>) => {
       selectedProvider: state.selectedProvider,
       selectedModel: state.selectedModel,
       enabledTools: state.enabledTools,
+      dashboardTheme: state.dashboardTheme,
     };
     localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(persistedSettings));
   } catch (err) {
@@ -80,16 +110,19 @@ const saveSettingsState = (state: ReturnType<typeof settingsReducer>) => {
 
 const preloadedState = loadPersistedState();
 
-export const store = configureStore({
+const storeConfig = {
   reducer: {
     filters: filterReducer,
     dashboards: dashboardReducer,
     chartData: chartDataReducer,
     chat: chatReducer,
     settings: settingsReducer,
+    dataSources: dataSourceReducer,
+    presentation: presentationReducer,
   },
   preloadedState,
-  middleware: (getDefaultMiddleware) =>
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  middleware: (getDefaultMiddleware: any) =>
     getDefaultMiddleware({
       serializableCheck: {
         // Ignore these action types for serializable check
@@ -97,7 +130,10 @@ export const store = configureStore({
       },
     }),
   devTools: import.meta.env.DEV,
-});
+};
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export const store = configureStore(storeConfig as any);
 
 // Subscribe to store changes and persist state
 let lastDashboardState = store.getState().dashboards;

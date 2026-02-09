@@ -1,4 +1,5 @@
 import React, { useState, useCallback, useRef } from 'react';
+import { Search, Brain } from 'lucide-react';
 import { agentService, StreamEvent } from '../../services/agentService';
 import { useAppSelector } from '../../store';
 import './AISearchBar.css';
@@ -112,7 +113,7 @@ const AISearchBar: React.FC<AISearchBarProps> = ({
     <div className="ai-search-bar">
       <form onSubmit={handleSubmit}>
         <div className="search-input-container">
-          <span className="search-icon">🔍</span>
+          <Search size={16} className="search-icon" />
           <input
             type="text"
             value={query}
@@ -138,7 +139,7 @@ const AISearchBar: React.FC<AISearchBarProps> = ({
         <div className="thinking-steps">
           {thinkingSteps.slice(-3).map((step, i) => (
             <div key={i} className="thinking-step">
-              <span className="thinking-icon">💭</span>
+              <Brain size={12} className="thinking-icon" />
               <span className="thinking-node">{step.node}:</span>
               <span className="thinking-message">{step.message}</span>
             </div>

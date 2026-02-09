@@ -890,9 +890,10 @@ async def analyze_events_by_conclusion(
                 agg: Dict[str, Any] = {
                     "terms": {
                         "script": {
-                            "source": f"doc['{source_date_field}'].value.year",
+                            "source": f"if (doc['{source_date_field}'].size() == 0) return null; doc['{source_date_field}'].value.year",
                             "lang": "painless"
                         },
+                        "missing_bucket": True,
                         "size": size
                     },
                     "aggs": {

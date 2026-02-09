@@ -89,6 +89,7 @@ class BISearchAgentState(TypedDict, total=False):
     thinking_steps: list[ThinkingStep]
     extracted_sources: list[Source]
     chart_configs: list[ChartConfig]
+    presentation_config: Optional[dict]
 
     # Error Handling
     error_message: Optional[str]
@@ -160,6 +161,7 @@ def create_initial_state(
         thinking_steps=[],
         extracted_sources=[],
         chart_configs=[],
+        presentation_config=None,
 
         # Error Handling
         error_message=None,

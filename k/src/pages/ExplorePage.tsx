@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { Search } from 'lucide-react';
 import AISearchBar from '../components/common/AISearchBar';
 import FilterPanel from '../components/filters/FilterPanel';
 import './ExplorePage.css';
@@ -72,7 +73,7 @@ const ExplorePage: React.FC = () => {
 
       {!queryResult && rawData.length === 0 && (
         <div className="explore-empty">
-          <div className="empty-icon">🔍</div>
+          <div className="empty-icon"><Search size={48} /></div>
           <h2>Start Exploring</h2>
           <p>Type a question in natural language to search and analyze your data</p>
           <div className="example-queries">

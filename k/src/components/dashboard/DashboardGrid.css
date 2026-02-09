@@ -2,25 +2,53 @@
   width: 100%;
   min-height: 400px;
   padding: 16px;
-  background: #f5f7fa;
+  background: #f1f5f9;
 }
 
-.dashboard-grid {
-  min-height: 100%;
+/* GridStack overrides */
+.grid-stack {
+  min-height: 400px;
 }
 
-.chart-panel {
+.grid-stack-item-content.chart-panel {
   background: #ffffff;
   border-radius: 8px;
+  border: none;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
   overflow: hidden;
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
+  height: 100%;
   transition: box-shadow 0.2s ease;
+  contain: layout style paint;
 }
 
-.chart-panel:hover {
+.grid-stack-item-content.chart-panel:hover {
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+}
+
+/* Chart panel with settings open */
+.grid-stack-item-content.chart-panel.with-settings {
+  box-shadow: 0 4px 20px rgba(99, 102, 241, 0.2);
+  border: 2px solid #6366f1;
+}
+
+.chart-panel-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.chart-panel-title {
+  flex: 1;
+  font-size: 12px;
+  font-weight: 500;
+  color: #0f172a;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .chart-panel-header {
@@ -28,8 +56,8 @@
   justify-content: space-between;
   align-items: center;
   padding: 4px 8px;
-  background: #f8f9fa;
-  border-bottom: 1px solid #eee;
+  background: #f1f5f9;
+  border-bottom: 1px solid #e2e8f0;
   min-height: 32px;
 }
 
@@ -43,7 +71,7 @@
 .chart-drag-handle {
   cursor: grab;
   padding: 4px 8px;
-  color: #999;
+  color: #64748b;
   font-weight: bold;
   letter-spacing: 2px;
   user-select: none;
@@ -56,7 +84,7 @@
 .chart-settings-btn {
   background: none;
   border: none;
-  color: #666;
+  color: #475569;
   font-size: 16px;
   cursor: pointer;
   padding: 4px 8px;
@@ -66,14 +94,20 @@
 }
 
 .chart-settings-btn:hover {
-  color: #3498db;
-  background: rgba(52, 152, 219, 0.1);
+  color: #6366f1;
+  background: rgba(99, 102, 241, 0.1);
+}
+
+.chart-settings-btn.active {
+  background: #6366f1;
+  color: white;
+  font-size: 18px;
 }
 
 .chart-remove-btn {
   background: none;
   border: none;
-  color: #999;
+  color: #64748b;
   font-size: 20px;
   cursor: pointer;
   padding: 4px 8px;
@@ -83,14 +117,15 @@
 }
 
 .chart-remove-btn:hover {
-  color: #dc3545;
-  background: rgba(220, 53, 69, 0.1);
+  color: #ef4444;
+  background: rgba(239, 68, 68, 0.1);
 }
 
 .chart-content {
   flex: 1;
   padding: 8px;
   overflow: hidden;
+  min-height: 0;
 }
 
 .empty-dashboard {
@@ -99,7 +134,7 @@
   justify-content: center;
   align-items: center;
   min-height: 300px;
-  color: #666;
+  color: #475569;
   text-align: center;
 }
 
@@ -107,24 +142,108 @@
   margin: 8px 0;
 }
 
-/* React Grid Layout overrides */
-.react-grid-item.react-grid-placeholder {
-  background: #3498db;
+/* GridStack placeholder styling */
+.grid-stack-placeholder > .placeholder-content {
+  background: #6366f1;
   opacity: 0.2;
   border-radius: 8px;
 }
 
-.react-resizable-handle {
-  background-image: none;
+/* Resize handles styling */
+.grid-stack > .grid-stack-item > .ui-resizable-handle {
+  background: transparent;
 }
 
-.react-resizable-handle::after {
+/* Corner handles */
+.grid-stack > .grid-stack-item > .ui-resizable-se,
+.grid-stack > .grid-stack-item > .ui-resizable-sw,
+.grid-stack > .grid-stack-item > .ui-resizable-ne,
+.grid-stack > .grid-stack-item > .ui-resizable-nw {
+  width: 16px;
+  height: 16px;
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+
+.grid-stack > .grid-stack-item:hover > .ui-resizable-se,
+.grid-stack > .grid-stack-item:hover > .ui-resizable-sw,
+.grid-stack > .grid-stack-item:hover > .ui-resizable-ne,
+.grid-stack > .grid-stack-item:hover > .ui-resizable-nw {
+  opacity: 1;
+}
+
+.grid-stack > .grid-stack-item > .ui-resizable-se::after,
+.grid-stack > .grid-stack-item > .ui-resizable-sw::after,
+.grid-stack > .grid-stack-item > .ui-resizable-ne::after,
+.grid-stack > .grid-stack-item > .ui-resizable-nw::after {
   content: '';
   position: absolute;
-  right: 4px;
-  bottom: 4px;
   width: 8px;
   height: 8px;
-  border-right: 2px solid #ccc;
-  border-bottom: 2px solid #ccc;
+  background: #6366f1;
+  border-radius: 2px;
+}
+
+.grid-stack > .grid-stack-item > .ui-resizable-se::after {
+  right: 2px;
+  bottom: 2px;
+}
+
+.grid-stack > .grid-stack-item > .ui-resizable-sw::after {
+  left: 2px;
+  bottom: 2px;
+}
+
+.grid-stack > .grid-stack-item > .ui-resizable-ne::after {
+  right: 2px;
+  top: 2px;
+}
+
+.grid-stack > .grid-stack-item > .ui-resizable-nw::after {
+  left: 2px;
+  top: 2px;
+}
+
+/* Edge handles */
+.grid-stack > .grid-stack-item > .ui-resizable-n,
+.grid-stack > .grid-stack-item > .ui-resizable-s {
+  height: 8px;
+  left: 16px;
+  right: 16px;
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+
+.grid-stack > .grid-stack-item > .ui-resizable-e,
+.grid-stack > .grid-stack-item > .ui-resizable-w {
+  width: 8px;
+  top: 16px;
+  bottom: 16px;
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+
+.grid-stack > .grid-stack-item:hover > .ui-resizable-n,
+.grid-stack > .grid-stack-item:hover > .ui-resizable-s,
+.grid-stack > .grid-stack-item:hover > .ui-resizable-e,
+.grid-stack > .grid-stack-item:hover > .ui-resizable-w {
+  opacity: 1;
+}
+
+/* Edit mode indicator */
+.grid-stack.editing > .grid-stack-item > .grid-stack-item-content {
+  outline: 2px dashed #6366f1;
+  outline-offset: -2px;
+}
+
+/* Animation */
+.grid-stack > .grid-stack-item {
+  transition: left 0.3s, top 0.3s, width 0.3s, height 0.3s;
+  will-change: transform;
+  contain: layout style;
+}
+
+.grid-stack > .grid-stack-item.ui-draggable-dragging,
+.grid-stack > .grid-stack-item.ui-resizable-resizing {
+  transition: none;
 }

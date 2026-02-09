@@ -105,7 +105,9 @@ class MCPToolClient:
         """Get headers for MCP request."""
         headers = {
             "Content-Type": "application/json",
+            "Accept": "application/json, text/event-stream",
             "MCP-Protocol-Version": self.MCP_PROTOCOL_VERSION,
+            "Origin": "http://localhost:8025",  # Add origin for CORS
         }
 
         # Add JWT token from context

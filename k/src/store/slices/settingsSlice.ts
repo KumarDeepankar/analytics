@@ -22,6 +22,7 @@ export interface SettingsState {
 
   // UI State
   isSettingsPanelOpen: boolean;
+  dashboardTheme: string;
 }
 
 const initialState: SettingsState = {
@@ -40,32 +41,55 @@ const initialState: SettingsState = {
 
   // UI
   isSettingsPanelOpen: false,
+  dashboardTheme: 'light',
 };
+
+// Default models when backend is unavailable
+const defaultModels: LLMModel[] = [
+  { id: 'llama3.2:latest', name: 'Llama 3.2', provider: 'ollama', description: 'Fast local model' },
+  { id: 'claude-3-5-sonnet-20241022', name: 'Claude 3.5 Sonnet', provider: 'anthropic', description: 'Best balance of intelligence and speed' },
+];
+
+// Default tools when backend is unavailable
+const defaultTools: Tool[] = [
+  { name: 'opensearch_query', description: 'Query OpenSearch for analytics data' },
+  { name: 'chart_generator', description: 'Generate chart configurations' },
+];
 
 // Async thunk to fetch available models
 export const fetchModels = createAsyncThunk('settings/fetchModels', async () => {
-  const response = await agentService.getModels();
-  const models: LLMModel[] = [];
+  try {
+    const response = await agentService.getModels();
+    const models: LLMModel[] = [];
 
-  // Convert provider/models response to flat list
-  for (const [provider, modelList] of Object.entries(response.providers)) {
-    for (const modelId of modelList) {
-      models.push({
-        id: modelId,
-        name: formatModelName(modelId),
-        provider: provider as 'anthropic' | 'ollama',
-        description: getModelDescription(modelId),
-      });
+    // Convert provider/models response to flat list
+    for (const [provider, modelList] of Object.entries(response.providers)) {
+      for (const modelId of modelList) {
+        models.push({
+          id: modelId,
+          name: formatModelName(modelId),
+          provider: provider as 'anthropic' | 'ollama',
+          description: getModelDescription(modelId),
+        });
+      }
     }
-  }
 
-  return { models, defaults: response.defaults };
+    return { models, defaults: response.defaults };
+  } catch {
+    // Return default models when backend is unavailable
+    return { models: defaultModels, defaults: { ollama: 'llama3.2:latest' } };
+  }
 });
 
 // Async thunk to fetch available tools
 export const fetchTools = createAsyncThunk('settings/fetchTools', async () => {
-  const tools = await agentService.getTools();
-  return tools;
+  try {
+    const tools = await agentService.getTools();
+    return tools;
+  } catch {
+    // Return default tools when backend is unavailable
+    return defaultTools;
+  }
 });
 
 // Helper to format model names
@@ -145,6 +169,11 @@ const settingsSlice = createSlice({
     closeSettingsPanel: (state) => {
       state.isSettingsPanelOpen = false;
     },
+
+    // Set dashboard background theme
+    setDashboardTheme: (state, action: PayloadAction<string>) => {
+      state.dashboardTheme = action.payload;
+    },
   },
   extraReducers: (builder) => {
     // Fetch models
@@ -200,6 +229,7 @@ export const {
   setEnabledTools,
   toggleSettingsPanel,
   closeSettingsPanel,
+  setDashboardTheme,
 } = settingsSlice.actions;
 
 export default settingsSlice.reducer;

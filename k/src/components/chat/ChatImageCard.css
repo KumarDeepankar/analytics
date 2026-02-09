@@ -1,0 +1,80 @@
+.chat-image-card {
+  background: white;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  overflow: hidden;
+  transition: all 0.2s;
+  max-width: 400px;
+}
+
+.chat-image-card:hover {
+  border-color: #cbd5e1;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+}
+
+.chat-image-card .image-preview-container {
+  position: relative;
+  max-height: 240px;
+  overflow: hidden;
+  background: #f8fafc;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.chat-image-card .image-preview-container img {
+  width: 100%;
+  max-height: 240px;
+  object-fit: contain;
+}
+
+.chat-image-card .image-title-overlay {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  padding: 6px 12px;
+  background: linear-gradient(transparent, rgba(0, 0, 0, 0.5));
+  color: white;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.chat-image-card .image-actions {
+  padding: 8px 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.chat-image-card .add-to-dashboard-btn {
+  padding: 5px 12px;
+  border: 1.5px solid #6366f1;
+  border-radius: 6px;
+  background: white;
+  color: #6366f1;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s;
+  white-space: nowrap;
+}
+
+.chat-image-card .add-to-dashboard-btn:hover {
+  background: #eef2ff;
+}
+
+.chat-image-card .add-to-dashboard-btn.added {
+  border-color: #22c55e;
+  color: #22c55e;
+}
+
+.chat-image-card .image-badge {
+  font-size: 11px;
+  color: #94a3b8;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}

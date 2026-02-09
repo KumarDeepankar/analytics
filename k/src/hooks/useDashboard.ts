@@ -22,7 +22,7 @@ export const useDashboard = () => {
   const isSaving = useAppSelector((state) => state.dashboards.isSaving);
 
   const activeDashboard = useMemo(
-    () => dashboards.find((d) => d.id === activeDashboardId) || null,
+    () => dashboards.find((d: Dashboard) => d.id === activeDashboardId) || null,
     [dashboards, activeDashboardId]
   );
 
@@ -71,7 +71,7 @@ export const useDashboard = () => {
 
       // Calculate default position
       const currentLayout = activeDashboard?.layout || [];
-      const maxY = currentLayout.reduce((max, item) => Math.max(max, item.y + item.h), 0);
+      const maxY = currentLayout.reduce((max: number, item: DashboardLayout) => Math.max(max, item.y + item.h), 0);
 
       const chartLayout: DashboardLayout = {
         i: chartId,

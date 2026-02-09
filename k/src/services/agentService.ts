@@ -2,6 +2,16 @@
  * Agent Service - Connects to the LangGraph BI Search Agent backend
  */
 
+import {
+  toApiSearchRequest,
+  fromApiSearchResponse,
+  toApiChartDataRequest,
+  fromApiChartDataResponse,
+  fromApiDataSources,
+  fromApiHealthResponse,
+} from './api';
+import type { ApiDataSourcesResponse } from './api/apiTypes';
+
 export interface SearchRequest {
   query: string;
   conversationId?: string;
@@ -60,8 +70,23 @@ export interface ModelsResponse {
   defaults: Record<string, string>;
 }
 
+export interface FieldInfo {
+  name: string;
+  type: 'keyword' | 'date' | 'numeric' | 'derived';
+  description?: string;
+}
+
+export interface DataSource {
+  id: string;
+  name: string;
+  description?: string;
+  fields: FieldInfo[];
+  dateFields: string[];
+  groupableFields: string[];
+}
+
 export interface StreamEvent {
-  type: 'thinking' | 'response' | 'sources' | 'charts' | 'error' | 'complete';
+  type: 'thinking' | 'response' | 'sources' | 'charts' | 'presentation' | 'error' | 'complete';
   data: unknown;
 }
 
@@ -99,6 +124,19 @@ class AgentService {
   }
 
   /**
+   * Get available data sources with their fields from MCP tools
+   */
+  async getDataSources(): Promise<DataSource[]> {
+    const response = await fetch(`${this.baseUrl}/data-sources`);
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ detail: response.statusText }));
+      throw new Error(error.detail || `Failed to get data sources: ${response.statusText}`);
+    }
+    const data: ApiDataSourcesResponse = await response.json();
+    return fromApiDataSources(data);
+  }
+
+  /**
    * Run a search query (non-streaming)
    */
   async search(request: SearchRequest): Promise<SearchResponse> {
@@ -107,16 +145,7 @@ class AgentService {
       headers: {
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({
-        query: request.query,
-        conversation_id: request.conversationId,
-        conversation_history: request.conversationHistory,
-        llm_provider: request.llmProvider || 'ollama',
-        llm_model: request.llmModel,
-        enabled_tools: request.enabledTools,
-        filters: request.filters,
-        stream: false,
-      }),
+      body: JSON.stringify(toApiSearchRequest({ ...request, stream: false })),
     });
 
     if (!response.ok) {
@@ -124,14 +153,7 @@ class AgentService {
     }
 
     const data = await response.json();
-    return {
-      query: data.query,
-      response: data.response,
-      sources: data.sources || [],
-      chartConfigs: data.chart_configs || [],
-      thinkingSteps: data.thinking_steps || [],
-      error: data.error,
-    };
+    return fromApiSearchResponse(data);
   }
 
   /**
@@ -144,16 +166,7 @@ class AgentService {
         'Content-Type': 'application/json',
         Accept: 'text/event-stream',
       },
-      body: JSON.stringify({
-        query: request.query,
-        conversation_id: request.conversationId,
-        conversation_history: request.conversationHistory,
-        llm_provider: request.llmProvider || 'ollama',
-        llm_model: request.llmModel,
-        enabled_tools: request.enabledTools,
-        filters: request.filters,
-        stream: true,
-      }),
+      body: JSON.stringify(toApiSearchRequest({ ...request, stream: true })),
     });
 
     if (!response.ok) {
@@ -204,6 +217,8 @@ class AgentService {
                   } else if (data[0]?.type && data[0]?.xField) {
                     yield { type: 'charts', data };
                   }
+                } else if (data.slides && data.title) {
+                  yield { type: 'presentation', data };
                 } else if (data.end_time) {
                   yield { type: 'complete', data };
                 }
@@ -228,10 +243,39 @@ class AgentService {
       throw new Error(`Health check failed: ${response.statusText}`);
     }
     const data = await response.json();
-    return {
-      status: data.status,
-      mcpSessionStats: data.mcp_session_stats,
-    };
+    return fromApiHealthResponse(data);
+  }
+
+  /**
+   * Fetch chart data via the agent/MCP tools gateway
+   */
+  async fetchChartData(chartConfig: {
+    dataSource: string;
+    xField: string;
+    yField?: string;
+    seriesField?: string;  // Split data by this field (e.g., country) to create multiple series
+    aggregation?: string;
+    type?: string;
+    filters?: Array<{ field: string; value: unknown; operator?: string }>;
+  }): Promise<{
+    labels: string[];
+    datasets: Array<{ name: string; data: Array<number | { name: string; value: number }> }>;
+    error?: string;
+  }> {
+    const response = await fetch(`${this.baseUrl}/chart-data`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(toApiChartDataRequest(chartConfig)),
+    });
+
+    if (!response.ok) {
+      throw new Error(`Failed to fetch chart data: ${response.statusText}`);
+    }
+
+    const data = await response.json();
+    return fromApiChartDataResponse(data);
   }
 }
 

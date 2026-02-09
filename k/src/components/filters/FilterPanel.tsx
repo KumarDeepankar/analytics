@@ -1,6 +1,8 @@
 import React from 'react';
+import { X } from 'lucide-react';
 import { useAppDispatch, useAppSelector } from '../../store';
 import { removeGlobalFilter, clearGlobalFilters } from '../../store/slices/filterSlice';
+import type { Filter } from '../../types';
 import './FilterPanel.css';
 
 const FilterPanel: React.FC = () => {
@@ -49,7 +51,7 @@ const FilterPanel: React.FC = () => {
         </button>
       </div>
       <div className="filter-chips">
-        {globalFilters.map((filter) => (
+        {globalFilters.map((filter: Filter) => (
           <div key={filter.id} className="filter-chip" title={`Source: ${filter.source || 'Manual'}`}>
             <span className="filter-field">{filter.field}</span>
             <span className="filter-operator">{formatOperator(filter.operator)}</span>
@@ -59,7 +61,7 @@ const FilterPanel: React.FC = () => {
               onClick={() => handleRemoveFilter(filter.id)}
               aria-label="Remove filter"
             >
-              ×
+              <X size={12} />
             </button>
           </div>
         ))}

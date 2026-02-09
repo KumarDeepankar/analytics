@@ -7,27 +7,29 @@
   background: #ffffff;
   border-radius: 8px;
   overflow: hidden;
+  position: relative;
+  contain: layout style;
 }
 
 .chart-wrapper.chart-loading,
 .chart-wrapper.chart-error {
   justify-content: center;
   align-items: center;
-  color: #666;
+  color: #475569;
 }
 
 .chart-wrapper.chart-error {
-  color: #dc3545;
-  background: #fff5f5;
+  color: #ef4444;
+  background: #fef2f2;
 }
 
 .loading-spinner {
   width: 40px;
   height: 40px;
-  border: 3px solid #f3f3f3;
-  border-top: 3px solid #3498db;
+  border: 3px solid #f1f5f9;
+  border-top: 3px solid #6366f1;
   border-radius: 50%;
-  animation: spin 1s linear infinite;
+  animation: spin 0.8s linear infinite;
 }
 
 @keyframes spin {
@@ -37,4 +39,228 @@
   100% {
     transform: rotate(360deg);
   }
+}
+
+/* View Toggle */
+.chart-view-toggle {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  display: flex;
+  gap: 2px;
+  background: #f1f5f9;
+  border-radius: 6px;
+  padding: 2px;
+  z-index: 10;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+}
+
+.view-toggle-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 24px;
+  border: none;
+  background: transparent;
+  border-radius: 4px;
+  cursor: pointer;
+  color: #64748b;
+  transition: all 0.15s;
+}
+
+.view-toggle-btn:hover {
+  background: #e2e8f0;
+  color: #0f172a;
+}
+
+.view-toggle-btn.active {
+  background: #ffffff;
+  color: #6366f1;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+}
+
+.view-toggle-btn svg {
+  flex-shrink: 0;
+}
+
+/* Export PNG Button */
+.chart-export-png-btn {
+  position: absolute;
+  bottom: 8px;
+  right: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: none;
+  background: rgba(241, 245, 249, 0.9);
+  border-radius: 6px;
+  cursor: pointer;
+  color: #64748b;
+  z-index: 10;
+  opacity: 0;
+  transition: all 0.15s;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+}
+
+.chart-wrapper:hover .chart-export-png-btn {
+  opacity: 1;
+}
+
+.chart-export-png-btn:hover {
+  background: #e2e8f0;
+  color: #0f172a;
+}
+
+/* Dark theme export button */
+.chart-wrapper[data-chart-theme="mesh"] .chart-export-png-btn,
+.chart-wrapper[data-chart-theme="midnight"] .chart-export-png-btn {
+  background: rgba(255, 255, 255, 0.08);
+  color: #94a3b8;
+}
+
+.chart-wrapper[data-chart-theme="mesh"] .chart-export-png-btn:hover,
+.chart-wrapper[data-chart-theme="midnight"] .chart-export-png-btn:hover {
+  background: rgba(255, 255, 255, 0.15);
+  color: #e2e8f0;
+}
+
+/* Filter Badges */
+.chart-filter-badge {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border-radius: 12px;
+  font-size: 11px;
+  font-weight: 600;
+  z-index: 10;
+  animation: badgePulse 0.3s ease-out;
+}
+
+@keyframes badgePulse {
+  0% {
+    transform: scale(0.8);
+    opacity: 0;
+  }
+  50% {
+    transform: scale(1.05);
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+.chart-filter-badge.creating {
+  background: linear-gradient(135deg, #6366f1, #4f46e5);
+  color: white;
+  box-shadow: 0 2px 6px rgba(99, 102, 241, 0.3);
+}
+
+.chart-filter-badge.affected {
+  background: linear-gradient(135deg, #e67e22, #d35400);
+  color: white;
+  box-shadow: 0 2px 6px rgba(230, 126, 34, 0.3);
+  left: auto;
+  right: 80px;
+}
+
+.chart-filter-badge svg {
+  opacity: 0.9;
+}
+
+/* ================================================================
+   CHART CANVAS THEME BACKGROUNDS
+   Each theme gives the chart canvas a designer-quality treatment.
+   ECharts backgroundColor is set to 'transparent' so CSS takes over.
+   ================================================================ */
+
+/* ── Soft Gradient — subtle cool tint ──────────────────────── */
+.chart-wrapper[data-chart-theme="soft-gradient"] {
+  background:
+    radial-gradient(ellipse at 10% 90%, rgba(199, 210, 254, 0.12) 0%, transparent 50%),
+    radial-gradient(ellipse at 90% 10%, rgba(253, 242, 248, 0.1) 0%, transparent 50%),
+    linear-gradient(135deg, #fcfcff 0%, #faf8ff 50%, #fefcfe 100%);
+}
+
+/* ── Dots — clean white with faint grid ────────────────────── */
+.chart-wrapper[data-chart-theme="dots"] {
+  background:
+    radial-gradient(circle, rgba(203, 213, 225, 0.25) 0.5px, transparent 0.5px),
+    #ffffff;
+  background-size: 16px 16px, 100% 100%;
+}
+
+/* ── Warm Sand — subtle warm canvas ────────────────────────── */
+.chart-wrapper[data-chart-theme="warm-sand"] {
+  background:
+    radial-gradient(ellipse at 0% 100%, rgba(254, 243, 199, 0.1) 0%, transparent 50%),
+    linear-gradient(160deg, #fffefb 0%, #fffcf7 50%, #fffbf5 100%);
+}
+
+/* ── Mesh (dark) — deep glass canvas ───────────────────────── */
+.chart-wrapper[data-chart-theme="mesh"] {
+  background:
+    radial-gradient(ellipse at 20% 80%, rgba(99, 102, 241, 0.06) 0%, transparent 50%),
+    radial-gradient(ellipse at 80% 20%, rgba(6, 182, 212, 0.04) 0%, transparent 50%),
+    linear-gradient(160deg, #0e1726 0%, #111d32 50%, #0f1829 100%);
+}
+.chart-wrapper[data-chart-theme="mesh"].chart-loading {
+  background: linear-gradient(160deg, #0e1726 0%, #111d32 100%);
+  color: #94a3b8;
+}
+.chart-wrapper[data-chart-theme="mesh"] .loading-spinner {
+  border-color: rgba(255, 255, 255, 0.08);
+  border-top-color: #818cf8;
+}
+.chart-wrapper[data-chart-theme="mesh"].chart-error {
+  background: linear-gradient(160deg, #0e1726 0%, #111d32 100%);
+  color: #f87171;
+}
+
+/* ── Midnight (dark) — deep violet canvas ──────────────────── */
+.chart-wrapper[data-chart-theme="midnight"] {
+  background:
+    radial-gradient(ellipse at 30% 70%, rgba(30, 27, 75, 0.08) 0%, transparent 50%),
+    radial-gradient(ellipse at 70% 30%, rgba(23, 37, 84, 0.06) 0%, transparent 50%),
+    linear-gradient(145deg, #0d1321 0%, #111828 30%, #151930 60%, #111828 100%);
+}
+.chart-wrapper[data-chart-theme="midnight"].chart-loading {
+  background: linear-gradient(145deg, #0d1321 0%, #111828 100%);
+  color: #94a3b8;
+}
+.chart-wrapper[data-chart-theme="midnight"] .loading-spinner {
+  border-color: rgba(255, 255, 255, 0.08);
+  border-top-color: #a78bfa;
+}
+.chart-wrapper[data-chart-theme="midnight"].chart-error {
+  background: linear-gradient(145deg, #0d1321 0%, #111828 100%);
+  color: #f87171;
+}
+
+/* ── Dark themes: view toggle overrides ────────────────────── */
+.chart-wrapper[data-chart-theme="mesh"] .chart-view-toggle,
+.chart-wrapper[data-chart-theme="midnight"] .chart-view-toggle {
+  background: rgba(255, 255, 255, 0.06);
+}
+.chart-wrapper[data-chart-theme="mesh"] .view-toggle-btn,
+.chart-wrapper[data-chart-theme="midnight"] .view-toggle-btn {
+  color: #94a3b8;
+}
+.chart-wrapper[data-chart-theme="mesh"] .view-toggle-btn:hover,
+.chart-wrapper[data-chart-theme="midnight"] .view-toggle-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: #e2e8f0;
+}
+.chart-wrapper[data-chart-theme="mesh"] .view-toggle-btn.active,
+.chart-wrapper[data-chart-theme="midnight"] .view-toggle-btn.active {
+  background: rgba(99, 102, 241, 0.25);
+  color: #c7d2fe;
+  box-shadow: none;
 }

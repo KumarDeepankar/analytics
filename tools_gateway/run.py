@@ -33,4 +33,4 @@ if __name__ == "__main__":
     logger.info("Features: Health monitoring, dynamic origin configuration, user-driven MCP servers")
     logger.info("NGROK COMPATIBILITY: Configured for HTTPS/ngrok access")
 
-    uvicorn.run(app, host=host, port=port, log_level="info")
+    uvicorn.run(app, host=host, port=port, log_level="info", proxy_headers=True, forwarded_allow_ips="*")

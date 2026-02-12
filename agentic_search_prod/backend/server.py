@@ -151,6 +151,7 @@ app = FastAPI(
     lifespan=lifespan
 )
 
+
 # Include authentication routes
 app.include_router(auth_router)
 app.include_router(debug_auth_router)
@@ -698,6 +699,8 @@ if __name__ == "__main__":
         app,
         host=host,
         port=port,
+        proxy_headers=True,
+        forwarded_allow_ips="*",
         timeout_graceful_shutdown=1  # Wait max 1 second for connections to close
     )
     server = uvicorn.Server(config)

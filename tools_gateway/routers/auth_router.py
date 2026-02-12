@@ -18,6 +18,17 @@ from tools_gateway.database import database
 
 logger = logging.getLogger(__name__)
 
+
+def _get_base_url(request: Request) -> str:
+    """Get external base URL respecting ALB/proxy forwarded headers."""
+    forwarded_proto = request.headers.get("x-forwarded-proto")
+    forwarded_host = request.headers.get("x-forwarded-host") or request.headers.get("host")
+    if forwarded_proto and forwarded_host:
+        # Strip internal port if present (ALB exposes on 443, not 8021)
+        host = forwarded_host.split(":")[0]
+        return f"{forwarded_proto}://{host}"
+    return str(request.base_url).rstrip("/")
+
 # Configuration: Require at least one role for SSO login
 # If True, users without any role (from group mappings) cannot login
 # Set REQUIRE_ROLE_FOR_LOGIN=false to allow users without roles
@@ -132,8 +143,8 @@ async def local_login(request: Request, request_data: Dict[str, Any]):
 @router.post("/login")
 async def oauth_login(request: Request, provider_id: str):
     """Initiate OAuth login flow"""
-    # Build redirect URI
-    base_url = str(request.base_url).rstrip('/')
+    # Build redirect URI (respects ALB/proxy forwarded headers)
+    base_url = _get_base_url(request)
     redirect_uri = f"{base_url}/auth/callback/"
 
     auth_data = oauth_provider_manager.create_authorization_url(provider_id, redirect_uri)
@@ -413,8 +424,8 @@ async def login_redirect(request: Request, provider_id: str, redirect_to: str):
         logger.warning(f"Attempted redirect to unauthorized origin: {redirect_origin}. Allowed: {allowed_origins}")
         raise HTTPException(status_code=403, detail="Invalid redirect URL - not in allowed origins")
 
-    # Build redirect URI for OAuth callback (reuse /auth/callback)
-    base_url = str(request.base_url).rstrip('/')
+    # Build redirect URI for OAuth callback (respects ALB/proxy forwarded headers)
+    base_url = _get_base_url(request)
     callback_uri = f"{base_url}/auth/callback/"
 
     # Create authorization URL
